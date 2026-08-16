@@ -43,6 +43,20 @@ v4l2-ctl -d /dev/v4l-subdev0 -c blue_balance=128         <span class="hl-c"># B 
 <li>記錄該光源下的 gains → 建立色溫→gains 表。</li>
 </ol>
 <div class="callout warn"><strong>調適陷阱：</strong>感測器端 AWB 對混合色溫不準。要精準色彩，關閉感測器 AWB，改平台端做（若有 ISP）。</div>
+<h2>11.6 深入：白平衡實作</h2>
+<div class="demo-block"><div class="demo-label">控制 AWB</div><pre>v4l2-ctl -d /dev/v4l-subdev0 -c auto_n_white_balance=0</pre></div>
+<ol>
+<li>拍灰卡，手動調 gains 直到 R=G=B。</li>
+<li>記錄該色溫的 gains。</li>
+<li>不同色溫重複 → 建表。</li>
+</ol>
+<div class="callout warn"><strong>陷阱：</strong>感測器端 AWB 對混合色溫不準；要精準色彩，關閉感測器 AWB、改平台端做。</div>
+
+<h2>11.7 練習</h2>
+<ol>
+<li>灰卡校正一組 gains。</li>
+<li>對比「開 AWB」與「關 AWB 手動」的結果。</li>
+</ol>
 
 
   <div class="outcome">

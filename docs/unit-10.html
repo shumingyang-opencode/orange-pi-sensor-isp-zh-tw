@@ -44,6 +44,18 @@ v4l2-ctl -d /dev/v4l-subdev0 -c analogue_gain=200</pre></div>
 
 <h2>AEC/AGC 收斂</h2>
 <div class="callout"><strong>調適要點：</strong>OV5640 的 AEC 依場景亮度調整曝光與增益。除錯「太暗」先確認 AEC 是否到快門/增益上限——受限就補光，別硬調。</div>
+<h2>10.6 深入：曝光 register 與 Worked Example</h2>
+<div class="demo-block"><div class="demo-label">讀目前曝光</div><pre>for r in 0x3501 0x3502 0x3503; do h=${r:2:2}; l=${r:4:2}; echo -n "$r: "; sudo i2ctransfer -y 3 w2@0x3c 0x$h 0x$l r1; done</pre></div>
+<p class="hint">曝光值依感測器位元布局組合（單元 3 的 16-bit 位址規則）。正式流程用驅動/平台控制，這裡只是理解。</p>
+<div class="demo-block"><div class="demo-label">控制曝光</div><pre>v4l2-ctl -d /dev/v4l-subdev0 -c exposure=1000</pre></div>
+<div class="callout"><strong>順序鐵則：</strong>先快門 → 類比增益 → 數位增益。用增益補曝光犧牲畫質。</div>
+
+<h2>10.7 練習</h2>
+<ol>
+<li>讀目前曝光/增益值。</li>
+<li>手動設定並確認生效。</li>
+<li>日光燈下檢查 banding。</li>
+</ol>
 
 
   <div class="outcome">

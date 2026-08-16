@@ -52,7 +52,21 @@
 <div class="demo-block"><div class="demo-label">四平台讀同一個 register（0x300A）</div><pre>RPi5:      i2ctransfer -y 22 w2@0x36 0x30 0x0a r1
 Orange Pi: i2ctransfer -y 3  w2@0x3c 0x30 0x0a r1
 Orin/Thor: i2ctransfer -y 0  w2@0x36 0x30 0x0a r1</pre></div>
+<h2>15.4 深入：對同一顆 OV5640 的四平台操作</h2>
+<table>
+<tr><th>面向</th><th>RPi5</th><th>Orange Pi</th><th>Orin Nano</th><th>Thor</th></tr>
+<tr><td>感測器控制</td><td>libcamera</td><td>V4L2 subdev</td><td>tegracam/Argus</td><td>tegracam/Holoscan</td></tr>
+<tr><td>曝光</td><td>ExposureTime</td><td>exposure</td><td>SensorMode exp_time</td><td>SensorMode</td></tr>
+<tr><td>白平衡</td><td>ColourGains</td><td>red/blue_balance</td><td>Argus AWB</td><td>Argus AWB</td></tr>
+<tr><td>RAW</td><td>rpicam --raw</td><td>v4l2-ctl</td><td>argus raw</td><td>argus/Holoscan</td></tr>
+</table>
+<div class="callout"><strong>核心領悟：</strong>register 相同、概念相同、流程相同；變的只有介面。</div>
 
+<h2>15.5 練習</h2>
+<ol>
+<li>列出「讀 sensor ID」在四平台的指令。</li>
+<li>說明 register 相同而介面不同的原因。</li>
+</ol>
 
 
   <div class="outcome">

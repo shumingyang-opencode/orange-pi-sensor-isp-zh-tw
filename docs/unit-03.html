@@ -61,6 +61,18 @@ sudo i2ctransfer -y 3 w2@0x3c 0x35 0x00 r1</pre></div>
 <tr><td class="reg">0x4740–0x4742</td><td>MIPI 介面</td><td>單元 6</td></tr>
 </table>
 <div class="callout warn"><strong>警告：</strong>正式流程走感測器驅動；手動 i2ctransfer 只做除錯理解。寫壞可重上電回復。</div>
+<h2>3.8 深入：I2C 讀寫的位元組序與 ACK 檢查</h2>
+<p>OV 感測器用 16-bit register 位址（big-endian）：</p>
+<div class="pipe"><span class="step">S</span><span class="arr">→</span><span class="step">0x0x3c<<1|0</span><span class="arr">→</span><span class="step">位址高</span><span class="arr">→</span><span class="step">位址低</span><span class="arr">→</span><span class="step">資料/讀</span><span class="arr">→</span><span class="step">P</span></div>
+<div class="demo-block"><div class="demo-label">讀感測器 ID</div><pre>sudo i2ctransfer -y 3 w2@0x3c 0x30 0x0a r1   <span class="hl-c"># 預期 OV5640 ID 高位</span></pre></div>
+<div class="callout warn"><strong>排查：</strong>讀回全 0xFF → 上拉/位址錯；讀回全 0x00 → 上電/reset 問題。用 i2ctransfer 讀寫並回讀驗證。</div>
+
+<h2>3.9 練習</h2>
+<ol>
+<li>讀感測器 ID，確認與 datasheet 相符。</li>
+<li>寫一組 register 後回讀驗證。</li>
+<li>記錄 I2C 位址與匯流排編號。</li>
+</ol>
 
 
   <div class="outcome">

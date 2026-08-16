@@ -50,6 +50,20 @@ v4l2-ctl -d /dev/video0 --stream-mmap=1 --stream-count=1 --stream-to=frame.yuv</
 <tr><td>全黑</td><td>曝光 0、格式錯、感測器沒輸出</td></tr>
 <tr><td>綠/紫</td><td>色彩格式（YUYV/Bayer）設定錯</td></tr>
 </table>
+<h2>5.7 深入：取流的完整驗證</h2>
+<div class="demo-block"><div class="demo-label">OV5640 取流驗證</div><pre><span class="hl-c"># 確認 media 管線</span>
+media-ctl -p -d /dev/media0
+<span class="hl-c"># 取一幀</span>
+v4l2-ctl -d /dev/video0 --stream-mmap=1 --stream-count=1 --stream-to=f.yuv
+<span class="hl-c"># 檢查格式</span>
+v4l2-ctl -d /dev/video0 --list-formats-ext</pre></div>
+<div class="callout"><strong>通過標準：</strong>取到一幀 = 感測器→CSI→video 鏈路通。接著才談調校。</div>
+
+<h2>5.8 練習</h2>
+<ol>
+<li>跑完整取流流程，確認格式。</li>
+<li>記錄支援的 fourcc 清單。</li>
+</ol>
 
 
   <div class="outcome">

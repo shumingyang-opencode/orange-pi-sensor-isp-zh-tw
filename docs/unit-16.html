@@ -57,6 +57,22 @@
 <li>固定測試場景，量化比較。</li>
 <li>一次只改一個參數、記錄前後。</li>
 </ul>
+<h2>16.4 深入：客製 OV5640 接入的檢查清單</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>□ 硬體：CSI lane / I2C / reset / clock
+□ DT overlay：compatible / reg / clocks / reset-gpios
+□ 驅動：現成 or 改 init table
+□ dmesg：probe 成功？讀到 ID？
+□ 出圖：能取到幀？
+□ RAW：Bayer order / 黑位 / 缺陷像素
+□ 調校：黑位 → LSC → AWB/CCM → NR/Sharpen</pre></div>
+<div class="callout warn"><strong>紀律：</strong>一次只換一個變數，保留官方模組當對照組。</div>
+
+<h2>16.5 總複習：寫下你的 SOP</h2>
+<ol>
+<li>寫一份「你的 bring-up SOP」。</li>
+<li>寫一份「你的調校流程與參數」。</li>
+<li>放進 repo 成為團隊資產。</li>
+</ol>
 
 
   <div class="outcome">

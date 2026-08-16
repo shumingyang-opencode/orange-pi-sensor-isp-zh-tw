@@ -59,7 +59,22 @@ SNR = 20*log10(400/20) = 26 dB   <span class="hl-c"># 不達標</span>
 <li><strong>NR 後</strong>：處理統計性雜訊。</li>
 <li>驗證：黑框 RAW 的 max 應被壓制。</li>
 </ul>
+<h2>13.6 深入：雜訊量測與增益上限</h2>
+<div class="demo-block"><div class="demo-label">量 σ vs gain</div><pre>python3 - <<'EOF'
+import rawpy, numpy as np, subprocess
+for g in [1, 2, 4, 8]:
+    # 用平台指令取 RAW（OV5640）
+    raw = rawpy.imread(f'g{g}.dng').raw_image
+    roi = raw[500:1500,500:1500].astype(float)
+    print(f'gain={g}  σ={roi.std():.1f}')
+EOF</pre></div>
+<div class="callout"><strong>判讀：</strong>σ 暴增的增益區間 = 不可接受 → 設定增益上限，改用曝光補。</div>
 
+<h2>13.7 練習</h2>
+<ol>
+<li>量測各增益 σ。</li>
+<li>決定增益上限並記錄。</li>
+</ol>
 
 
   <div class="outcome">

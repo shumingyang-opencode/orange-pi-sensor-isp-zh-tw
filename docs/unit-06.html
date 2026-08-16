@@ -69,6 +69,17 @@ done</pre></div>
    ├─ 否 ─→ media 管線/格式（media-ctl 檢查）
    └─ 是 ─→ 基本 bring-up ✅</pre></div>
 <div class="callout warn"><strong>Orange Pi 特別注意：</strong>各板卡 BSP 的節點/位址/格式都不同——先確認你板卡「已知可用組合」，否則決策樹第一步就會卡住。</div>
+<h2>6.7 深入：上電時序與 clock 驗證</h2>
+<div class="pipe"><span class="step">電源穩定</span><span class="arr">→</span><span class="step">MCLK/XCLK</span><span class="arr">→</span><span class="step">RESET 釋放</span><span class="arr">→</span><span class="step">I2C 可通</span><span class="arr">→</span><span class="step">MIPI 輸出</span></div>
+<div class="callout warn"><strong>最常見錯誤：</strong>RESET 未釋放就下 I2C → register「看似能寫但沒生效」。先確認 GPIO/時序，再碰 register。</div>
+<div class="demo-block"><div class="demo-label">dmesg 追線索</div><pre>dmesg | grep -i -E "ov5640|probe|csi|mipi|v4l2"</pre></div>
+
+<h2>6.8 練習：完整 Bring-up 演練</h2>
+<ol>
+<li>dmesg 確認 probe 成功、讀到 ID。</li>
+<li>media-ctl 確認管線。</li>
+<li>v4l2-ctl 取到幀。</li>
+</ol>
 
 
   <div class="outcome">
