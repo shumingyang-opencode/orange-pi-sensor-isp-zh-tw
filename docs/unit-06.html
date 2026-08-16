@@ -26,37 +26,47 @@
 <div class="back-link"><a href="index.html">← 單元教學</a></div>
 
 <div class="guide">
-<h2>Bring-up 四件事</h2>
+<h2>6.1 Bring-up 四件事</h2>
 <table>
-<tr><th>檢查項</th><th>驗證</th></tr>
-<tr><td><strong>電源</strong></td><td>AVDD/DVDD/DOVDD 到位</td></tr>
-<tr><td><strong>Clock</strong></td><td>XCLK/MCLK 有輸出（示波器 / dmesg）</td></tr>
-<tr><td><strong>I2C</strong></td><td>i2cdetect + 讀 ID</td></tr>
-<tr><td><strong>MIPI</strong></td><td>dmesg 無 CSI 錯誤、media 有資料</td></tr>
+<tr><th>檢查項</th><th>驗證</th><th>工具</th></tr>
+<tr><td><strong>電源</strong></td><td>AVDD/DVDD/DOVDD 到位</td><td>示波器/電表</td></tr>
+<tr><td><strong>Clock</strong></td><td>XCLK/MCLK 有輸出</td><td>示波器 / dmesg</td></tr>
+<tr><td><strong>I2C</strong></td><td>i2cdetect + 讀 ID</td><td>i2c-tools</td></tr>
+<tr><td><strong>MIPI</strong></td><td>dmesg 無 CSI 錯誤、media 有資料</td><td>dmesg / media-ctl</td></tr>
 </table>
 
-<h2>用 dmesg 追線索</h2>
+<h2>6.2 上電時序（OV5640 需求）</h2>
+<div class="pipe"><span class="step">AVDD/DOVDD 穩定</span><span class="arr">→</span><span class="step">XCLK/MCLK</span><span class="arr">→</span><span class="step">RESET 釋放</span><span class="arr">→</span><span class="step">I2C 可通</span><span class="arr">→</span><span class="step">MIPI 輸出</span></div>
+<div class="callout warn"><strong>最常見錯誤：</strong>RESET 未釋放就下 I2C → register「看似能寫但沒生效」。Orange Pi 的 RESET/PWDN 腳位由板卡與驅動管理，先確認 GPIO 設定正確。</div>
+
+<h2>6.3 用 dmesg 追線索</h2>
 <div class="demo-block"><div class="demo-label">常見除錯指令</div><pre>dmesg | grep -i -E "ov5640|csi|mipi|v4l2|probe"
 cat /sys/kernel/debug/gpio | grep -i reset</pre></div>
+<table>
+<tr><th>dmesg 訊號</th><th>意義</th></tr>
+<tr><td><code>ov5640 ... probe success</code></td><td>驅動 probe 成功</td></tr>
+<tr><td><code>probe failure / failed to read chip id</code></td><td>I2C/clock/電源問題</td></tr>
+<tr><td><code>CSI: no data</code></td><td>MIPI 沒資料 → 感測器沒輸出</td></tr>
+</table>
 
-<h2>Register dump 實作</h2>
+<h2>6.4 Register dump 實作</h2>
 <div class="demo-block"><div class="demo-label">透過 controls 與 i2c 讀</div><pre>v4l2-ctl -d /dev/v4l-subdev0 -C exposure     <span class="hl-c"># 讀曝光 control</span>
 v4l2-ctl -d /dev/v4l-subdev0 -C analogue_gain
 for r in 0x3500 0x3501 0x3502 0x3503; do
   echo -n "$r: "; sudo i2ctransfer -y 3 w2@0x3c ${r:2:2} ${r:4:2} r1
 done</pre></div>
 
-<h2>Bring-up 決策樹</h2>
+<h2>6.5 Bring-up 決策樹</h2>
 <div class="demo-block"><div class="demo-label">「沒畫面」決策樹</div><pre>1. dmesg 有 ov5640 probe？
-   ├─ error → 電源/clock/reset/位址
+   ├─ error ─→ 電源/clock/reset/位址（I2C 0x3c?）
    └─ ok ─┐
 2. i2cdetect 看到 0x3c？讀到 0x5640？
-   ├─ 否 → I2C/位址問題
+   ├─ 否 ─→ I2C 位址/上電問題
    └─ 是 ─┐
 3. v4l2-ctl 取到幀？
-   ├─ 否 → media 管線/格式
-   └─ 是 → 基本 bring-up ✅</pre></div>
-<div class="callout warn"><strong>Orange Pi 特別注意：</strong>各板卡 BSP 的節點/位址/格式都不同——先確認你板卡「已知可用組合」。</div>
+   ├─ 否 ─→ media 管線/格式（media-ctl 檢查）
+   └─ 是 ─→ 基本 bring-up ✅</pre></div>
+<div class="callout warn"><strong>Orange Pi 特別注意：</strong>各板卡 BSP 的節點/位址/格式都不同——先確認你板卡「已知可用組合」，否則決策樹第一步就會卡住。</div>
 
 
   <div class="outcome">
