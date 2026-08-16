@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>單元教學 · Orange Pi 感測器影像調適繁中教學站</title>
+<meta name="description" content="16 單元教學目錄">
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<div class="container">
+<header><h1>單元教學</h1><p class="subtitle">16 個單元，從感測器基礎到影像品質調適</p></header>
+<nav class="topnav">  <a href="../index.html">首頁</a>
+  <a href="../map.html">概念地圖</a>
+  <a href="../learning-path.html">學習路線</a>
+  <a href="../docs/index.html">單元教學</a>
+  <a href="../about.html">關於</a></nav>
+<div class="back-link"><a href="../index.html">← 回首頁</a></div>
+<div class="card-grid">
+  <a class="card lv-emerald" href="unit-01.html">
+    <div class="c-name">單元 1 · 平台相機生態總覽</div>
+    <div class="c-zh">Orange Pi 多樣化板卡、V4L2 生態、CSI 支援現況。</div>
+    <div class="c-tags"><span class="c-tag">生態</span><span class="c-tag">L0</span></div>
+  </a>
+  <a class="card lv-emerald" href="unit-02.html">
+    <div class="c-name">單元 2 · 影像感測器基礎</div>
+    <div class="c-zh">pixel array、Bayer CFA、快門型態、感測器方塊。</div>
+    <div class="c-tags"><span class="c-tag">基礎</span><span class="c-tag">L0</span></div>
+  </a>
+  <a class="card lv-emerald" href="unit-03.html">
+    <div class="c-name">單元 3 · 感測器通訊介面</div>
+    <div class="c-zh">I2C/SCCB、register 讀寫、page switching、讀 sensor ID。</div>
+    <div class="c-tags"><span class="c-tag">通訊</span><span class="c-tag">L0</span></div>
+  </a>
+  <a class="card lv-cyan" href="unit-04.html">
+    <div class="c-name">單元 4 · 平台相機框架與驅動</div>
+    <div class="c-zh">V4L2 感測器驅動模型、media controller、ov5640.c。</div>
+    <div class="c-tags"><span class="c-tag">驅動</span><span class="c-tag">L1</span></div>
+  </a>
+  <a class="card lv-cyan" href="unit-05.html">
+    <div class="c-name">單元 5 · 第一個鏡頭跑起來</div>
+    <div class="c-zh">啟用驅動、v4l2-ctl 拍照/取流、GStreamer。</div>
+    <div class="c-tags"><span class="c-tag">動手做</span><span class="c-tag">L1</span></div>
+  </a>
+  <a class="card lv-cyan" href="unit-06.html">
+    <div class="c-name">單元 6 · Sensor Bring-up 與除錯</div>
+    <div class="c-zh">上電時序、clock、dmesg 與 register dump、常見失敗。</div>
+    <div class="c-tags"><span class="c-tag">除錯</span><span class="c-tag">L1</span></div>
+  </a>
+  <a class="card lv-amber" href="unit-07.html">
+    <div class="c-name">單元 7 · ISP 管線深入</div>
+    <div class="c-zh">感測器內 ISP、OV5640 內建校正、平台後處理。</div>
+    <div class="c-tags"><span class="c-tag">ISP</span><span class="c-tag">L2</span></div>
+  </a>
+  <a class="card lv-amber" href="unit-08.html">
+    <div class="c-name">單元 8 · RAW 擷取與資料格式</div>
+    <div class="c-zh">V4L2 pixel format、Bayer、bit depth、格式確認。</div>
+    <div class="c-tags"><span class="c-tag">格式</span><span class="c-tag">L2</span></div>
+  </a>
+  <a class="card lv-amber" href="unit-09.html">
+    <div class="c-name">單元 9 · 各平台 ISP 架構差異</div>
+    <div class="c-zh">sensor 內 ISP vs 平台 ISP，SoC 差異。</div>
+    <div class="c-tags"><span class="c-tag">架構</span><span class="c-tag">L2</span></div>
+  </a>
+  <a class="card lv-fuchsia" href="unit-10.html">
+    <div class="c-name">單元 10 · 曝光與自動曝光（AE）</div>
+    <div class="c-zh">曝光三要素、OV5640 AEC/AGC、V4L2 曝光控制。</div>
+    <div class="c-tags"><span class="c-tag">調校</span><span class="c-tag">L3</span></div>
+  </a>
+  <a class="card lv-fuchsia" href="unit-11.html">
+    <div class="c-name">單元 11 · 白平衡與色彩（AWB/CCM）</div>
+    <div class="c-zh">AWB 原理、OV5640 內建 AWB、色彩調整。</div>
+    <div class="c-tags"><span class="c-tag">調校</span><span class="c-tag">L3</span></div>
+  </a>
+  <a class="card lv-fuchsia" href="unit-12.html">
+    <div class="c-name">單元 12 · 鏡頭陰影校正（LSC）</div>
+    <div class="c-zh">lens shading 成因、感測器/平台 LSC、校正。</div>
+    <div class="c-tags"><span class="c-tag">調校</span><span class="c-tag">L3</span></div>
+  </a>
+  <a class="card lv-fuchsia" href="unit-13.html">
+    <div class="c-name">單元 13 · 雜訊與降噪</div>
+    <div class="c-zh">雜訊來源、感測器 DPC、後處理降噪。</div>
+    <div class="c-tags"><span class="c-tag">調校</span><span class="c-tag">L3</span></div>
+  </a>
+  <a class="card lv-fuchsia" href="unit-14.html">
+    <div class="c-name">單元 14 · 清晰度、動態範圍與調校工作流</div>
+    <div class="c-zh">sharpness/HDR、後處理工作流、調校紀律。</div>
+    <div class="c-tags"><span class="c-tag">調校</span><span class="c-tag">L3</span></div>
+  </a>
+  <a class="card lv-violet" href="unit-15.html">
+    <div class="c-name">單元 15 · 四平台影像調校功能比較</div>
+    <div class="c-zh">四平台 ISP、可調參數、工具鏈比較。</div>
+    <div class="c-tags"><span class="c-tag">比較</span><span class="c-tag">L4</span></div>
+  </a>
+  <a class="card lv-violet" href="unit-16.html">
+    <div class="c-name">單元 16 · 多感測器與實作案例</div>
+    <div class="c-zh">多相機、客製 OV 接入、V4L2 實作案例。</div>
+    <div class="c-tags"><span class="c-tag">實作</span><span class="c-tag">L4</span></div>
+  </a>
+</div>
+<div class="callout info"><strong>建議路線：</strong>第一次學建議照 <a href="../learning-path.html">學習路線</a> 依序進行；只想看影像調校的讀者可先跳單元 10–14。</div>
+<footer>這是 Orange Pi 感測器影像調適繁中教學站 · 由 OpenCode 建置<br>
+  <span class="footer-license">本站教學內容（繁體中文解說）為本站原創，採 CC-BY-4.0；技術名詞與 register 範例引用自 <a href="https://linux-sunxi.org/" rel="noopener">linux-sunxi</a>、<a href="https://www.kernel.org/doc/html/latest/media/" rel="noopener">Linux V4L2 文件</a> 與公開感測器資料。</span></footer>
+</div></body></html>

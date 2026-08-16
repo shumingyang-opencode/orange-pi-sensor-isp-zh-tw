@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>單元 15 · 四平台影像調校功能比較 · Orange Pi 感測器影像調適繁中教學站</title>
+<meta name="description" content="Orange Pi 視角">
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<div class="container">
+
+<header>
+  <h1>單元 15 · 四平台影像調校功能比較</h1>
+  <p class="subtitle">Orange Pi 視角</p>
+</header>
+
+<nav class="topnav">  <a href="../index.html">首頁</a>
+  <a href="../map.html">概念地圖</a>
+  <a href="../learning-path.html">學習路線</a>
+  <a href="../docs/index.html">單元教學</a>
+  <a href="../about.html">關於</a></nav>
+
+<div class="back-link"><a href="index.html">← 單元教學</a></div>
+
+<div class="guide">
+<h2>Orange Pi 在四平台中的位置</h2>
+<table>
+<tr><th>項目</th><th>RPi5</th><th><strong>Orange Pi</strong></th><th>Orin Nano</th><th>Thor T5000</th></tr>
+<tr><td>ISP 形態</td><td>SoC 硬體 ISP</td><td><strong>感測器內建為主</strong></td><td>NVIDIA ISP</td><td>Blackwell+Holoscan</td></tr>
+<tr><td>AE/AWB</td><td>libcamera ✅</td><td><strong>sensor AEC/AGC/AWB ⚠️</strong></td><td>NVIDIA ✅✅</td><td>NVIDIA ✅✅</td></tr>
+<tr><td>LSC</td><td>✅</td><td><strong>⚠️ 有限/後處理</strong></td><td>✅</td><td>✅</td></tr>
+<tr><td>NR/Sharpen</td><td>✅</td><td><strong>⚠️ 靠後處理</strong></td><td>✅✅</td><td>✅✅</td></tr>
+<tr><td>HDR</td><td>✅ 多幀</td><td><strong>⚠️ 依驅動</strong></td><td>✅</td><td>✅✅</td></tr>
+<tr><td>工具鏈</td><td>開源</td><td><strong>V4L2（陽春但開放）</strong></td><td>封閉但強</td><td>新</td></tr>
+<tr><td>調校門檻</td><td>中</td><td><strong>高（DIY）</strong></td><td>低（自動化）</td><td>低（自動化）</td></tr>
+</table>
+<div class="callout"><strong>Orange Pi 定位：</strong>調校功能最弱，但「最貼近 Linux 底層」——適合想徹底理解感測器 register 與 V4L2 的工程師；追求畫質時升級到 RPi5 / NVIDIA。</div>
+
+<h2>選型建議</h2>
+<ul>
+<li><strong>學感測器底層</strong> → Orange Pi（V4L2 原生）。</li>
+<li><strong>開源調校</strong> → RPi5。</li>
+<li><strong>高品質量產</strong> → Orin Nano。</li>
+<li><strong>次世代機器人</strong> → Thor T5000。</li>
+</ul>
+
+
+  <div class="outcome">
+    <strong>看完這單元你應該能說出：</strong>
+    <ul><li>四平台調校能力差異。</li><li>Orange Pi 的定位：底層開放、功能有限。</li><li>各平台工具鏈與調校門檻。</li><li>依目的選平台。</li></ul>
+  </div>
+
+  <h2>延伸閱讀</h2>
+  <ul>
+    <li>下一篇：<a href="unit-16.html">單元 16 · 多感測器與實作案例</a>。</li>
+<li>對照站：<a href="https://shumingyang-opencode.github.io/rpi5-sensor-isp-zh-tw/" rel="noopener">RPi5 站</a></li>
+    <li><a href="../learning-path.html">學習路線</a>：複習全站</li>
+  </ul>
+
+  <div class="next-prev">
+    <a href="unit-14.html"><div class="np-label">← 上一篇</div><div class="np-name">單元 14 · 清晰度、動態範圍與調校工作流</div></a>
+    <a class="np-next" href="unit-16.html"><div class="np-label">下一篇 →</div><div class="np-name">單元 16 · 多感測器與實作案例</div></a>
+  </div>
+</div>
+
+<footer>這是 Orange Pi 感測器影像調適繁中教學站 · 由 OpenCode 建置<br>
+  <span class="footer-license">本站教學內容（繁體中文解說）為本站原創，採 CC-BY-4.0；技術名詞與 register 範例引用自 <a href="https://linux-sunxi.org/" rel="noopener">linux-sunxi</a>、<a href="https://www.kernel.org/doc/html/latest/media/" rel="noopener">Linux V4L2 文件</a> 與公開感測器資料。</span></footer>
+
+</div>
+</body>
+</html>

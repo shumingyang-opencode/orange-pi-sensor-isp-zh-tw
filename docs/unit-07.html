@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>單元 7 · ISP 管線深入 · Orange Pi 感測器影像調適繁中教學站</title>
+<meta name="description" content="感測器內 ISP vs 平台">
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<div class="container">
+
+<header>
+  <h1>單元 7 · ISP 管線深入</h1>
+  <p class="subtitle">感測器內 ISP vs 平台</p>
+</header>
+
+<nav class="topnav">  <a href="../index.html">首頁</a>
+  <a href="../map.html">概念地圖</a>
+  <a href="../learning-path.html">學習路線</a>
+  <a href="../docs/index.html">單元教學</a>
+  <a href="../about.html">關於</a></nav>
+
+<div class="back-link"><a href="index.html">← 單元教學</a></div>
+
+<div class="guide">
+<h2>Orange Pi 的 ISP 現實</h2>
+<p>與 RPi5（硬體 ISP）不同，Orange Pi 的影像校正<strong>多半發生在感測器內部</strong>（OV5640 內建 AEC/AGC/AWB/DPC/簡單色彩處理），平台 ISP 依 SoC 而有無：</p>
+<table>
+<tr><th>SoC</th><th>平台 ISP</th><th>調校空間</th></tr>
+<tr><td>RK3588</td><td>Rockchip ISP（可達）</td><td>較大（需 Rockchip 工具）</td></tr>
+<tr><td>H618/H616</td><td>多無完整 ISP</td><td>小（靠感測器）</td></tr>
+</table>
+<div class="callout"><strong>調適關鍵：</strong>先搞清楚「校正發生在感測器端還是平台端」——OV5640 的 register 裡就有 AEC/AGC/AWB 開關，平台端沒有 ISP 時就靠這些。</div>
+
+<h2>OV5640 內建校正（公開 register 群）</h2>
+<table class="reg-table">
+<tr><th>Register 群</th><th>功能</th></tr>
+<tr><td class="reg">0x3500–0x350F</td><td>AEC/AGC（曝光與增益）</td></tr>
+<tr><td class="reg">0x5180–0x51A5</td><td>AWB（白平衡）</td></tr>
+<tr><td class="reg">0x5000–0x5003</td><td>ISP 功能開關（色彩/降噪）</td></tr>
+</table>
+<div class="callout info"><strong>觀念：</strong>「感測器內 ISP」是好用但有限——它能出「還可以的圖」，但要做專業調校（LSC 網格、CCM 分段），還是需要平台 ISP（如 RK3588）。</div>
+
+
+  <div class="outcome">
+    <strong>看完這單元你應該能說出：</strong>
+    <ul><li>Orange Pi 的 ISP 現實：多靠感測器內建。</li><li>OV5640 內建 AEC/AGC/AWB 的 register 群。</li><li>RK3588 vs H6xx 的平台 ISP 差異。</li><li>感測器內 ISP 的優點與限制。</li></ul>
+  </div>
+
+  <h2>延伸閱讀</h2>
+  <ul>
+    <li>下一篇：<a href="unit-08.html">單元 8 · RAW 擷取與資料格式</a>。</li>
+<li><a href="https://www.ovt.com/products/ov5640" rel="noopener">OV5640 資料</a></li>
+    <li><a href="../learning-path.html">學習路線</a>：複習全站</li>
+  </ul>
+
+  <div class="next-prev">
+    <a href="unit-06.html"><div class="np-label">← 上一篇</div><div class="np-name">單元 6 · Sensor Bring-up 與除錯</div></a>
+    <a class="np-next" href="unit-08.html"><div class="np-label">下一篇 →</div><div class="np-name">單元 8 · RAW 擷取與資料格式</div></a>
+  </div>
+</div>
+
+<footer>這是 Orange Pi 感測器影像調適繁中教學站 · 由 OpenCode 建置<br>
+  <span class="footer-license">本站教學內容（繁體中文解說）為本站原創，採 CC-BY-4.0；技術名詞與 register 範例引用自 <a href="https://linux-sunxi.org/" rel="noopener">linux-sunxi</a>、<a href="https://www.kernel.org/doc/html/latest/media/" rel="noopener">Linux V4L2 文件</a> 與公開感測器資料。</span></footer>
+
+</div>
+</body>
+</html>
