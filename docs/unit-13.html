@@ -44,7 +44,20 @@
 <li>後處理：時間域平均（多幀）或空間降噪（OpenCV fastNlMeansDenoising）。</li>
 <li>或升級到有 ISP 的板卡。</li>
 </ol>
-<div class="callout warn"><strong>鐵律：</strong>降噪與細節是取捨——NR 太強畫面變「塑膠感」。</div>
+<div class="callout warn"><strong>鐵律：</strong>降噪與細節是取捨——NR 太強畫面變「塑膠感」。</div><h2>13.6 雜訊預算（Worked Example）</h2>
+<div class="demo-block"><div class="demo-label">判斷「補光還是接受雜訊」</div><pre><span class="hl-c"># 目標 SNR >= 30dB（σ/S < 3.2%）</span>
+<span class="hl-c"># gain 高時量測：σ=20, 訊號=400</span>
+SNR = 20*log10(400/20) = 26 dB   <span class="hl-c"># 不達標</span>
+<span class="hl-c"># 補光 + 降增益：訊號 800, σ≈18 → SNR 33 dB ✓</span>
+<span class="hl-c"># 結論：補光 + 降增益 優於 硬拉增益</span></pre></div>
+<div class="callout"><strong>工程判斷：</strong>用 SNR 預算量化，先定可接受的 SNR，再決定曝光/增益/補光組合。</div>
+<h2>13.7 DPC 與 NR 順序</h2>
+<ul>
+<li><strong>DPC 先</strong>：修缺陷像素（否則 NR 把亮點擴散成亮斑）。</li>
+<li><strong>NR 後</strong>：處理統計性雜訊。</li>
+<li>驗證：黑框 RAW 的 max 應被壓制。</li>
+</ul>
+
 
 
   <div class="outcome">

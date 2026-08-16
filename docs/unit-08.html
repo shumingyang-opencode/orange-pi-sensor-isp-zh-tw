@@ -40,7 +40,19 @@
 <li>RAW 有 RGGB/BGGR/GRBG/GBRG；OV5640 是 <strong>RGGB</strong>。</li>
 <li>位元深越高動態範圍越好。</li>
 </ul>
-<div class="callout warn"><strong>調適紀律：</strong>固定「同一格式 + 同一解析度」比較，避免 binning/格式切換造成的假性差異。</div>
+<div class="callout warn"><strong>調適紀律：</strong>固定「同一格式 + 同一解析度」比較，避免 binning/格式切換造成的假性差異。</div><h2>8.6 RAW 擷取實作（本平台）</h2>
+<div class="demo-block"><div class="demo-label">v4l2-ctl 取 RAW（SRGGB10 等 fourcc）</div><pre>v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=SRGGB10</pre></div>
+<p class="hint">RAW 是影像品質分析的根本：雜訊、黑位、Bayer order 都回 RAW。</p>
+<h2>8.7 常見 RAW 格式錯誤</h2>
+<table>
+<tr><th>錯誤</th><th>症狀</th><th>檢查</th></tr>
+<tr><td>Bayer order 錯</td><td>色彩全亂</td><td>拍純色卡判別四通道</td></tr>
+<tr><td>bit depth 錯讀</td><td>暗部階調斷裂</td><td>確認 RAW 位元深</td></tr>
+<tr><td>packing 錯</td><td>條紋狀假影</td><td>用對應位元深工具解析</td></tr>
+</table>
+<h2>8.8 多模式一致性（調校前必修）</h2>
+<div class="callout warn"><strong>重要：</strong>不同解析度/ binning 下 Bayer order 與 shading 不同。調校與回歸必須<strong>鎖定單一模式</strong>（固定 size + format）。</div>
+
 
 
   <div class="outcome">

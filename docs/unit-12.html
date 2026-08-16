@@ -44,7 +44,22 @@ gray = cv2.imread('graycard.png', 0)      <span class="hl-c"># 均勻灰</span>
 gain = gray.mean() / (gray + 1e-6)        <span class="hl-c"># 逐像素增益（需平滑）</span>
 # 套用到影像 frame_out = frame * gain
 EOF</pre></div>
-<div class="callout warn"><strong>關鍵：</strong>LSC 是「鏡頭 + 感測器」組合特有——換鏡頭就要重新校正。</div>
+<div class="callout warn"><strong>關鍵：</strong>LSC 是「鏡頭 + 感測器」組合特有——換鏡頭就要重新校正。</div><h2>12.6 LSC 網格結構（本平台）</h2>
+<ul>
+<li>本平台 LSC 路線：<strong>後處理（OpenCV 增益圖）</strong>。</li>
+<li>網格每節點存 R/Gr/Gb/B 增益，節點間插值。</li>
+<li>有平台 ISP 時用平台網格格式；否則用後處理增益圖。</li>
+</ul>
+
+<h2>12.7 手算 LSC 增益圖（無工具時）</h2>
+<div class="demo-block"><div class="demo-label">從均勻灰 RAW 推算</div><pre>python3 - <<'EOF'
+import numpy as np
+# raw = 讀取的 RAW（分通道 R/Gr/Gb/B）
+# center = 中央區均值；gain = center / cell（四周>1）
+# 需分通道各自計算；對純灰卡才準
+EOF</pre></div>
+<div class="callout"><strong>注意：</strong>手算只為理解；量產請用工具校正。換鏡頭後暗角比變化 >5% → 重新校正。</div>
+
 
 
   <div class="outcome">
