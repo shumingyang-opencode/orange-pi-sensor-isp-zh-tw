@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>單元 2 · 影像感測器基礎 · Orange Pi 感測器影像調適繁中教學站</title>
-<meta name="description" content="Bayer、快門型態">
+<meta name="description" content="Bayer、快門型態、OV5640 規格">
 <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
 <link rel="stylesheet" href="../assets/site.css">
 </head>
@@ -13,7 +13,7 @@
 
 <header>
   <h1>單元 2 · 影像感測器基礎</h1>
-  <p class="subtitle">Bayer、快門型態</p>
+  <p class="subtitle">Bayer、快門型態、OV5640 規格</p>
 </header>
 
 <nav class="topnav">  <a href="../index.html">首頁</a>
@@ -28,34 +28,35 @@
 <h2>感測器把光變成 RAW</h2>
 <div class="pipe"><span class="step">光子</span><span class="arr">→</span><span class="step">像素</span><span class="arr">→</span><span class="step">增益</span><span class="arr">→</span><span class="step">ADC</span><span class="arr">→</span><span class="step">RAW</span></div>
 
-<h2>Bayer CFA（以 OV5640 為例）</h2>
-<p>OV5640 用標準 <strong>Bayer RGGB</strong> 排列：每像素只取 R/G/B 之一，之後由 demosaic 重建全彩。</p>
+<h2>Bayer CFA（OV5640 = RGGB）</h2>
 <table class="reg-table">
-<tr><td class="val">R</td><td class="val">G</td><td class="val">R</td><td class="val">G</td></tr>
-<tr><td class="val">G</td><td class="val">B</td><td class="val">G</td><td class="val">B</td></tr>
+<tr><td class="val">R</td><td class="val">Gr</td><td class="val">R</td><td class="val">Gr</td></tr>
+<tr><td class="val">Gb</td><td class="val">B</td><td class="val">Gb</td><td class="val">B</td></tr>
 </table>
+<div class="callout info"><strong>意義：</strong>RAW 每像素單色，demosaic 才變全彩；Bayer order 錯 → 色彩全錯（單元 8）。</div>
 
 <h2>快門型態</h2>
 <table>
 <tr><th>型態</th><th>特性</th><th>OV5640</th></tr>
-<tr><td><strong>Rolling</strong></td><td>逐列曝光，高速物體扭曲</td><td>✅（預設）</td></tr>
-<tr><td><strong>Global</strong></td><td>全像素同時，無扭曲</td><td>❌（需 OV9281 等）</td></tr>
+<tr><td><strong>Rolling</strong></td><td>逐列曝光，高速扭曲</td><td>✅ 預設</td></tr>
+<tr><td><strong>Global</strong></td><td>全像素同時曝光</td><td>—（OV9281）</td></tr>
 </table>
-<div class="callout info"><strong>調適前先懂：</strong>感測器的雜訊、動態範圍、色彩響應是「天花板」；後續所有校正都只是逼近它。</div>
 
-<h2>OV5640 重點規格（公開資料）</h2>
+<h2>OV5640 完整規格（公開）</h2>
 <table class="reg-table">
-<tr><th>項目</th><th>數值</th></tr>
+<tr><th>項目</th><th>規格</th></tr>
 <tr><td>解析度</td><td>5 MP（2592×1944）</td></tr>
-<tr><td>像素尺寸</td><td>1.4 µm</td></tr>
-<tr><td>輸出介面</td><td>MIPI CSI-2（2-lane）/ DVP</td></tr>
-<tr><td>內部功能</td><td>AEC/AGC/AWB、DPC、內建 ISP</td></tr>
+<tr><td>像素</td><td>1.4 µm</td></tr>
+<tr><td>輸出</td><td>MIPI CSI-2（2-lane）/ DVP</td></tr>
+<tr><td>內建功能</td><td>AEC/AGC/AWB、DPC、內建 ISP</td></tr>
+<tr><td>I2C 位址</td><td>0x3C（寫）/ 0x3D（讀），可切 0x21</td></tr>
+<tr><td>感測器 ID</td><td>0x300A=0x56 / 0x300B=0x40</td></tr>
 </table>
 
 
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
-    <ul><li>感測器把光轉成 RAW 的流程。</li><li>OV5640 的 Bayer 排列與 5MP 規格。</li><li>Rolling 與 Global shutter 差異。</li><li>感測器「天花板」觀念。</li></ul>
+    <ul><li>感測器光→RAW 流程。</li><li>OV5640 RGGB 與 5MP 規格。</li><li>Rolling/Global 差異。</li><li>OV5640 完整規格與 I2C 位址。</li></ul>
   </div>
 
   <h2>延伸閱讀</h2>
@@ -72,7 +73,7 @@
 </div>
 
 <footer>這是 Orange Pi 感測器影像調適繁中教學站 · 由 OpenCode 建置<br>
-  <span class="footer-license">本站教學內容（繁體中文解說）為本站原創，採 CC-BY-4.0；技術名詞與 register 範例引用自 <a href="https://linux-sunxi.org/" rel="noopener">linux-sunxi</a>、<a href="https://www.kernel.org/doc/html/latest/media/" rel="noopener">Linux V4L2 文件</a> 與公開感測器資料。</span></footer>
+  <span class="footer-license">本站教學內容（繁體中文解說）為本站原創，採 CC-BY-4.0；register 與指令引用自 <a href="https://linux-sunxi.org/" rel="noopener">linux-sunxi</a>、<a href="https://www.kernel.org/doc/html/latest/media/" rel="noopener">Linux V4L2 文件</a> 與公開感測器資料。</span></footer>
 
 </div>
 </body>

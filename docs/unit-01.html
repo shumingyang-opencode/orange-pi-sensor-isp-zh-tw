@@ -26,26 +26,26 @@
 
 <div class="guide">
 <h2>Orange Pi 不是「一顆」感測器平台</h2>
-<p>Orange Pi 涵蓋多種 SoC（<strong>RK3588</strong>、<strong>H618</strong>、<strong>H616</strong> 等），相機支援因 SoC 而異——這是與 RPi5「統一體驗」最大的不同。</p>
+<p>Orange Pi 涵蓋多種 SoC（<strong>RK3588</strong>、<strong>H618</strong>、<strong>H616</strong> 等），相機支援因 SoC 而異。</p>
 <table>
 <tr><th>SoC</th><th>代表板卡</th><th>CSI/ISP</th></tr>
-<tr><td>Rockchip <strong>RK3588</strong></td><td>Orange Pi 5 系列</td><td>有 CSI、有 ISP（Rockchip ISP）</td></tr>
-<tr><td>Allwinner <strong>H618</strong></td><td>Orange Pi Zero 3</td><td>CSI 支援依 BSP</td></tr>
+<tr><td>Rockchip <strong>RK3588</strong></td><td>Orange Pi 5 系列</td><td>有 CSI、有 Rockchip ISP</td></tr>
+<tr><td>Allwinner <strong>H618</strong></td><td>Orange Pi Zero 3</td><td>CSI 依 BSP</td></tr>
 <tr><td>Allwinner <strong>H616</strong></td><td>Orange Pi Zero 2W</td><td>CSI 有限</td></tr>
 </table>
 
 <h2>相機框架：V4L2 / media controller</h2>
-<div class="pipe"><span class="step">感測器 subdev</span><span class="arr">→</span><span class="step">CSI-2 接收器</span><span class="arr">→</span><span class="step">(ISP)</span><span class="arr">→</span><span class="step">video device</span><span class="arr">→</span><span class="step">應用（v4l2-ctl）</span></div>
-<div class="callout"><strong>核心概念：</strong>Linux 用 <strong>media controller</strong> 描述「感測器→接收器→ISP→video」的管線；用 <strong>V4L2 subdev</strong> 控制感測器 register。這是所有 Linux 相機調適的共通語言。</div>
+<div class="pipe"><span class="step">感測器 subdev</span><span class="arr">→</span><span class="step">CSI-2 接收器</span><span class="arr">→</span><span class="step">(ISP)</span><span class="arr">→</span><span class="step">video device</span><span class="arr">→</span><span class="step">v4l2-ctl</span></div>
+<div class="callout"><strong>核心概念：</strong>Linux 用 <strong>media controller</strong> 描述「感測器→接收器→ISP→video」管線；用 <strong>V4L2 subdev</strong> 控制感測器。這是所有 Linux 相機調適的共通語言。</div>
 
 <h2>感測器支援現況</h2>
-<p>Orange Pi 社群最常見的 OmniVision 感測器是 <span class="ov">OV5640</span>（5MP，驅動 <code>ov5640.c</code> 已進 Linux mainline）。</p>
-<div class="callout warn"><strong>現況提醒：</strong>Orange Pi 各板卡的相機支援「要自己確認」——先查板卡 BSP / 社群 overlay，再決定感測器板。</div>
+<p>Orange Pi 社群最常見的 OmniVision 感測器是 <span class="ov">OV5640</span>（驅動 <code>ov5640.c</code> 已在 Linux mainline）。</p>
+<div class="callout warn"><strong>先確認：</strong>查你板卡 BSP / 社群 overlay 的「已知可用組合」再動手。</div>
 
 
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
-    <ul><li>Orange Pi 不是單一平台，SoC 決定相機能力。</li><li>V4L2 / media controller 管線結構。</li><li>OV5640 是 Linux 上最常見的 OV 感測器。</li><li>為什麼要先確認板卡 BSP 支援。</li></ul>
+    <ul><li>Orange Pi 的 SoC 決定相機能力。</li><li>V4L2 / media controller 管線。</li><li>OV5640 是 Linux 上最常見 OV 感測器。</li><li>先確認板卡 BSP 支援。</li></ul>
   </div>
 
   <h2>延伸閱讀</h2>
@@ -62,7 +62,7 @@
 </div>
 
 <footer>這是 Orange Pi 感測器影像調適繁中教學站 · 由 OpenCode 建置<br>
-  <span class="footer-license">本站教學內容（繁體中文解說）為本站原創，採 CC-BY-4.0；技術名詞與 register 範例引用自 <a href="https://linux-sunxi.org/" rel="noopener">linux-sunxi</a>、<a href="https://www.kernel.org/doc/html/latest/media/" rel="noopener">Linux V4L2 文件</a> 與公開感測器資料。</span></footer>
+  <span class="footer-license">本站教學內容（繁體中文解說）為本站原創，採 CC-BY-4.0；register 與指令引用自 <a href="https://linux-sunxi.org/" rel="noopener">linux-sunxi</a>、<a href="https://www.kernel.org/doc/html/latest/media/" rel="noopener">Linux V4L2 文件</a> 與公開感測器資料。</span></footer>
 
 </div>
 </body>

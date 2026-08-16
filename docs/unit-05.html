@@ -25,24 +25,33 @@
 <div class="back-link"><a href="index.html">← 單元教學</a></div>
 
 <div class="guide">
-<h2>載入驅動與設定管線</h2>
-<div class="demo-block"><div class="demo-label">設定 media 管線</div><pre>media-ctl -d /dev/media0 -r
+<h2>步驟 1：設定 media 管線</h2>
+<div class="demo-block"><div class="demo-label">media-ctl 建立連結與格式</div><pre>media-ctl -d /dev/media0 -r
 media-ctl -d /dev/media0 -l "'ov5640 3-003c':0->'csi2':0[1]"
-media-ctl -d /dev/media0 -V "'ov5640 3-003c':0[fmt:UYVY8_2X8/1280x720]"</pre></div>
-<p class="hint">格式/路徑依板卡 BSP 而異——以你板卡的 dmesg 與 media graph 為準。</p>
+media-ctl -d /dev/media0 -V "'ov5640 3-003c':0[fmt:UYVY8_2X8/1280x720]"
+media-ctl -d /dev/media0 -V "'csi2':0[fmt:UYVY8_2X8/1280x720]"</pre></div>
+<p class="hint">路徑/格式依板卡 BSP 而異，以 <code>media-ctl -p</code> 輸出為準。</p>
 
-<h2>拍照與取流</h2>
-<div class="demo-block"><div class="demo-label">v4l2-ctl</div><pre>v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=YUYV
+<h2>步驟 2：拍照</h2>
+<div class="demo-block"><div class="demo-label">v4l2-ctl 取一幀</div><pre>v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=YUYV
 v4l2-ctl -d /dev/video0 --stream-mmap=1 --stream-count=1 --stream-to=frame.yuv</pre></div>
-<div class="callout"><strong>第一步驗證：</strong>能取到一幀，代表感測器→CSI→video 鏈路通——接著才談得上影像品質。</div>
+<div class="callout"><strong>第一步驗證：</strong>能取到一幀 = 感測器→CSI→video 鏈路通。接著才談調校。</div>
 
-<h2>用 GStreamer 看畫面</h2>
+<h2>步驟 3：GStreamer 預覽</h2>
 <div class="demo-block"><div class="demo-label">即時預覽</div><pre>gst-launch-1.0 v4l2src device=/dev/video0 ! videoconvert ! autovideosink</pre></div>
+
+<h2>常見失敗</h2>
+<table>
+<tr><th>症狀</th><th>方向</th></tr>
+<tr><td>v4l2-ctl stream 失敗</td><td>media 管線未設好 / 驅動 probe 失敗</td></tr>
+<tr><td>全黑</td><td>曝光 0、格式錯、感測器沒輸出</td></tr>
+<tr><td>綠/紫</td><td>色彩格式（YUYV/Bayer）設定錯</td></tr>
+</table>
 
 
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
-    <ul><li>用 media-ctl 設定管線格式與連結。</li><li>用 v4l2-ctl 拍照/取流。</li><li>用 GStreamer 即時預覽。</li><li>「取到一幀 = 鏈路通」的驗證。</li></ul>
+    <ul><li>用 media-ctl 設定管線連結與格式。</li><li>用 v4l2-ctl 拍照取流。</li><li>用 GStreamer 預覽。</li><li>三種常見失敗的方向。</li></ul>
   </div>
 
   <h2>延伸閱讀</h2>
@@ -59,7 +68,7 @@ v4l2-ctl -d /dev/video0 --stream-mmap=1 --stream-count=1 --stream-to=frame.yuv</
 </div>
 
 <footer>這是 Orange Pi 感測器影像調適繁中教學站 · 由 OpenCode 建置<br>
-  <span class="footer-license">本站教學內容（繁體中文解說）為本站原創，採 CC-BY-4.0；技術名詞與 register 範例引用自 <a href="https://linux-sunxi.org/" rel="noopener">linux-sunxi</a>、<a href="https://www.kernel.org/doc/html/latest/media/" rel="noopener">Linux V4L2 文件</a> 與公開感測器資料。</span></footer>
+  <span class="footer-license">本站教學內容（繁體中文解說）為本站原創，採 CC-BY-4.0；register 與指令引用自 <a href="https://linux-sunxi.org/" rel="noopener">linux-sunxi</a>、<a href="https://www.kernel.org/doc/html/latest/media/" rel="noopener">Linux V4L2 文件</a> 與公開感測器資料。</span></footer>
 
 </div>
 </body>
