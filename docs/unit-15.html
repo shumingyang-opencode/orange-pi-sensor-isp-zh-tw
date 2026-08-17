@@ -211,6 +211,74 @@ EOF</pre></div>
 - [ ] 我理解「感測器物理可攜、介面不可攜」並能舉例。
 - [ ] 我能用「感測器 register 最終值」驗證跨平台等效性。</pre></div>
 
+  <h2>15.18 Register 位元級完整工作流</h2>
+<p>跨平台移植的核心是「register 概念的對應」。以下是四平台的位元級比較：</p>
+<table class="reg-table">
+<tr><th>面向</th><th>Orange Pi (V4L2)</th><th>RPi5 (libcamera)</th><th>Orin Nano (NVIDIA)</th><th>Thor (Holoscan)</th></tr>
+<tr><td>曝光控制</td><td>0x3500~0x3502 (lines)</td><td>ExposureTime (µs)</td><td>NVIDIA AE (µs)</td><td>NVIDIA AE (µs)</td></tr>
+<tr><td>增益控制</td><td>0x350A (整數 128=1.0×)</td><td>AnalogueGain (浮點)</td><td>NVIDIA gain</td><td>NVIDIA gain</td></tr>
+<tr><td>AWB 控制</td><td>0x5185/0x5187 (整數)</td><td>ColourGains (浮點)</td><td>NVIDIA AWB</td><td>NVIDIA AWB</td></tr>
+<tr><td>I2C 位址</td><td>0x3c</td><td>0x3c</td><td>0x36</td><td>0x36</td></tr>
+<tr><td>format 控制</td><td>media-ctl -V</td><td>libcamera format</td><td>NVIDIA format</td><td>Holoscan format</td></tr>
+</table>
+<div class="callout info"><strong>位元級關鍵：</strong> 跨平台移植的「翻譯公式」：<br>• 曝光：lines × row週期(29.6µs) = µs<br>• 增益：整數 / 128 = 浮點比值<br>• I2C：先 i2cdetect 確認位址<br>• format：SRGGB10/1X10 是四平台的共同語言</div>
+
+<h2>15.19 多層疑難排解決策樹</h2>
+<p><strong>決策樹 A：跨平台移植失敗</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 A</div><pre>從 Orange Pi 移植到 RPi5 失敗？
+├─ I2C 位址不同（0x3c vs 0x36）
+│  └─ 先 i2cdetect 確認位址
+├─ 曝光單位不同（lines vs µs）
+│  └─ 換算：lines × 29.6µs = µs
+├─ 增益單位不同（整數 vs 浮點）
+│  └─ 換算：整數 / 128 = 浮點
+├─ format 描述不同
+│  └─ 用「位元深 + Bayer order」統一描述
+└─ 控制 API 不同
+   └─ V4L2_CID_* vs libcamera controls</pre></div>
+
+<p><strong>決策樹 B：跨平台影像品質不一致</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 B</div><pre>四平台影像品質不一致？
+├─ 曝光設定不同 → 統一 exposure 值
+├─ AWB 設定不同 → 統一 gains 值
+├─ ISP 管線不同 → 確認各平台 ISP 差異
+├─ format 不同 → 統一 Bayer order + 位元深
+└─ 後處理不同 → 確認各平台工具差異
+   └─ 用「感測器 register 最終值」驗證等效性</pre></div>
+
+<h2>15.20 量測驗證完整 SOP</h2>
+<table>
+<tr><th>步驟</th><th>指令</th><th>預期輸出</th><th>判讀標準</th></tr>
+<tr><td>1. Orange Pi 基準</td><td><code>i2cget -y 3 0x3c 0x3500</code></td><td>exposure 值</td><td>基準值</td></tr>
+<tr><td>2. 換算 µs</td><td>lines × 29.6µs</td><td>µs 值</td><td>RPi5/NVIDIA 用</td></tr>
+<tr><td>3. RPi5 設定</td><td><code>libcamera --set-ctrl=ExposureTime=XXX</code></td><td>µs 設定</td><td>等效曝光</td></tr>
+<tr><td>4. 增益換算</td><td>整數 / 128 = 浮點</td><td>浮點值</td><td>RPi5 用</td></tr>
+<tr><td>5. 取幀對比</td><td>四平台各取一幀</td><td>四張影像</td><td>品質一致</td></tr>
+<tr><td>6. 量測 Delta E</td><td>Python script</td><td>Delta E</td><td>&lt; 3（一致）</td></tr>
+</table>
+
+<h2>15.21 四平台終極對照</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th><th>推薦</th></tr>
+<tr><td>代表 SoC</td><td>RK3588 / H618</td><td>BCM2712</td><td>Orin Nano</td><td>T5000</td><td>依需求</td></tr>
+<tr><td>調校框架</td><td>V4L2 + Python</td><td>libcamera</td><td>NVIDIA 工具</td><td>Holoscan</td><td>底層→V4L2</td></tr>
+<tr><td>工具鏈</td><td>V4L2 + 自寫</td><td>libcamera tools</td><td>NVIDIA tools</td><td>Holoscan SDK</td><td>學習→V4L2</td></tr>
+<tr><td>學習曲線</td><td>陡（底層）</td><td>中</td><td>中（封閉但強）</td><td>中（新）</td><td>底層→Orange Pi</td></tr>
+<tr><td>適合</td><td>理解感測器</td><td>開源產品</td><td>量產畫質</td><td>多機/雲端</td><td>依目標選</td></tr>
+</table>
+
+<h2>15.22 完整 Bring-up 專案 Checklist</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 完成「跨平台移植對照」專案並產出文件
+- [ ] 換算 Orange Pi 的 lines 與 RPi5 的 µs 曝光單位
+- [ ] 換算整數 gains（128=1.0×）與浮點比值
+- [ ] 確認 Orin/Thor 的 OV 位址是 0x36 而非 0x3c
+- [ ] 驗證「感測器物理可攜、介面不可攜」並舉例
+- [ ] 用「感測器 register 最終值」驗證跨平台等效性
+- [ ] 產出「cross-platform translation table」
+- [ ] 用「位元深 + Bayer order」統一描述格式
+- [ ] 產出「platform comparison report」（含數據）
+- [ ] 用「底層→開源→封閉」三分法選平台</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>四平台調校能力差異。</li><li>Orange Pi 定位：底層開放、功能有限。</li><li>各平台工具鏈與門檻。</li><li>依目的選平台。</li></ul>

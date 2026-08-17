@@ -192,6 +192,76 @@ EOF</pre></div>
 - [ ] 我已跑完 2.13 專案並產出「感測器體檢表」。
 - [ ] 我能指出「RAW 驗證」為何是四平台通用的第一鐵律。</pre></div>
 
+  <h2>2.17 Register 位元級完整工作流</h2>
+<p>感測器的核心秘密在 register。以下是以 OV5640 為例的「讀→改→寫→驗證」位元級完整序列：</p>
+<table class="reg-table">
+<tr><th>步驟</th><th>暫存器/位址</th><th>位元欄位</th><th>操作</th><th>預期值</th></tr>
+<tr><td>1. 讀感測器 ID</td><td>0x300A</td><td>[7:0] chip ID high</td><td><code>i2cget -y 3 0x3c 0x300a</code></td><td>0x56</td></tr>
+<tr><td>2. 讀感測器 ID</td><td>0x300B</td><td>[7:0] chip ID low</td><td><code>i2cget -y 3 0x3c 0x300b</code></td><td>0x40</td></tr>
+<tr><td>3. 讀 SCCL</td><td>0x3040</td><td>[7:0] sccb mode</td><td><code>i2cget ... 0x3040</code></td><td>0x00（標準 I2C）</td></tr>
+<tr><td>4. 驗證 OV 輸出格式</td><td>0x3808~0x380B</td><td>[15:0] width, [15:0] height</td><td><code>i2cget ... 0x3808; i2cget ... 0x3809</code></td><td>依 init 設定</td></tr>
+<tr><td>5. 讀 OB 值</td><td>0x3B07</td><td>[7:0] black level</td><td><code>i2cget ... 0x3b07</code></td><td>~0x10（黑位偏移）</td></tr>
+<tr><td>6. 驗證 PLL</td><td>0x3035</td><td>[7:4] PLL prediv</td><td><code>i2cget ... 0x3035</code></td><td>依 target fps</td></tr>
+</table>
+<div class="callout info"><strong>位元級關鍵：</strong> OV5640 的 0x300A/0x300B 是感測器身份的「出生證明」。0xFF = I2C 無回應（硬體問題）；0x56/0x40 = 正常。這是所有感測器除錯的第一步。</div>
+
+<h2>2.18 多層疑難排解決策樹</h2>
+<p><strong>決策樹 A：感測器 ID 讀不到</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 A</div><pre>i2cget 0x300a 回什麼？
+├─ 0xFF → I2C 無回應
+│  ├─ i2cdetect -y 3 → 0x3c 出現嗎？
+│  │  ├─ 不出現 → I2C bus 問題（上拉/時序）
+│  │  └─ 出現 → 位址正確但 register 讀失敗 → 檢查 power-on 時序
+│  └─ 嘗試 i2cget -y 3 0x3c 0x300a（其他位址）
+├─ 0x00 → 感測器 reset 未釋放 → 檢查 reset-gpios
+├─ 0x30/0x31 → 不同感測器（如 OV9281）→ 確認模組型號
+└─ 0x56 → 正常！繼續讀 0x300B 確認低 byte</pre></div>
+
+<p><strong>決策樹 B：感測器 ID 正確但無 RAW 輸出</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 B</div><pre>stream-on 後有資料嗎？
+├─ 無 → DPHY 訊號問題
+│  ├─ 檢查 dmesg csi 錯誤 → 時序/頻寬
+│  └─ 嘗試降低解析度 → 是否能輸出
+├─ 有但全黑 → sensor 無曝光
+│  ├─ 讀 0x3500/0x3501/0x3502 → 驗證 AEC 行為
+│  └─ 手動設 0x3503=0x08 → 覆蓋自動曝光
+└─ 有但全白 → sensor 過曝
+   ├─ 減少 analog gain：0x350a → 降低值
+   └─ 減少 exposure：0x3500~0x3502 → 減少值</pre></div>
+
+<h2>2.19 量測驗證完整 SOP</h2>
+<table>
+<tr><th>步驟</th><th>指令</th><th>預期輸出</th><th>判讀標準</th></tr>
+<tr><td>1. 讀感測器 ID</td><td><code>i2cget -y 3 0x3c 0x300a</code></td><td>0x56</td><td>OV5640 正常回應</td></tr>
+<tr><td>2. 讀 0x300B</td><td><code>i2cget -y 3 0x3c 0x300b</code></td><td>0x40</td><td>完整 ID = 0x5640</td></tr>
+<tr><td>3. 輸出格式</td><td><code>i2cget -y 3 0x3c 0x3808</code></td><td>依解析度</td><td>width 高 byte</td></tr>
+<tr><td>4. 黑位 OB</td><td><code>i2cget -y 3 0x3c 0x3b07</code></td><td>~0x10</td><td>感測器基準黑位</td></tr>
+<tr><td>5. PLL 設定</td><td><code>i2cget -y 3 0x3c 0x3035</code></td><td>依 fps</td><td>PLL 與 clock 一致</td></tr>
+<tr><td>6. 嘗試手動曝光</td><td><code>i2cset -y 3 0x3c 0x3503 0x08</code></td><td>覆蓋自動曝光</td><td>可手動控制</td></tr>
+</table>
+
+<h2>2.20 四平台終極對照</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th><th>推薦</th></tr>
+<tr><td>感測器支援</td><td>OV/OV5640 為主</td><td>IMX/OV 全系列</td><td>IMX 系列高階</td><td>IMX 系列高階</td><td>畫質→IMX</td></tr>
+<tr><td>RAW 位元深</td><td>8/10/12</td><td>10/12</td><td>10/12/14</td><td>10/12/14</td><td>動態範圍→14-bit</td></tr>
+<tr><td>感測器內 ISP</td><td>OV5640 內建</td><td>IMX 內建（有限）</td><td>感測器直出 RAW</td><td>感測器直出 RAW</td><td>畫質→直出</td></tr>
+<tr><td>Bayer 驗證工具</td><td>自寫 Python</td><td>libcamera + rpicam</td><td>NVIDIA 工具</td><td>Holoscan 範例</td><td>學習→Python</td></tr>
+<tr><td>I2C 位址</td><td>0x3c</td><td>0x3c</td><td>0x36</td><td>0x36</td><td>跨平台先 i2cdetect</td></tr>
+</table>
+
+<h2>2.21 完整 Bring-up 專案 Checklist</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 確認感測器型號（OV5640 / OV9281 / IMX219）
+- [ ] 讀取 0x300A + 0x300B 確認完整 ID
+- [ ] 記錄感測器支援的四種 Bayer 位元深
+- [ ] 產出「感測器規格表」（型號/ID/格式/最大解析度）
+- [ ] 確認 I2C 位址（0x3c vs 0x36）並記錄
+- [ ] 測量黑位 OB 值並記錄
+- [ ] 產出「感測器體檢表」（含所有關鍵 register 值）
+- [ ] 驗證 Bayer order（RGGB / GRBG / GBRG / BGGR）
+- [ ] 確認 rolling vs global shutter 行為
+- [ ] 用四通道均值法驗證 Bayer order</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>感測器光→RAW 流程。</li><li>OV5640 RGGB 與 5MP 規格。</li><li>Rolling/Global 差異。</li><li>OV5640 完整規格與 I2C 位址。</li><li>full well / ADC bit 的意義。</li><li>用 RAW 四通道驗證 Bayer order。</li></ul>

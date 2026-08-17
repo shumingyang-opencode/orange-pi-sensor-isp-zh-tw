@@ -181,6 +181,73 @@ readlink -f /sys/bus/i2c/devices/*/driver 2>/dev/null | grep -i ov</pre></div>
 - [ ] 我了解 libcamera / Argus / V4L2 之間的抽象層差異。
 - [ ] 我能從「media graph 不完整」反推是驅動還是 DT 問題。</pre></div>
 
+  <h2>4.17 Register 位元級完整工作流</h2>
+<p>V4L2 subdev 的控制介面是 register 的高階抽象。以下是以 OV5640 為例的位元級操作序列：</p>
+<table class="reg-table">
+<tr><th>步驟</th><th>V4L2 控制</th><th>register 對應</th><th>操作</th><th>預期值</th></tr>
+<tr><td>1. 查 controls</td><td>v4l2-ctl -l</td><td>—</td><td><code>v4l2-ctl -d /dev/v4l-subdev0 -l</code></td><td>列出所有控制項</td></tr>
+<tr><td>2. 讀曝光值</td><td>exposure</td><td>0x3500/0x3501/0x3502</td><td><code>v4l2-ctl -d subdev0 --get-ctrl=exposure</code></td><td>依場景</td></tr>
+<tr><td>3. 寫曝光值</td><td>exposure</td><td>同上</td><td><code>v4l2-ctl -d subdev0 --set-ctrl=exposure=500</code></td><td>值已設定</td></tr>
+<tr><td>4. 驗證 register</td><td>i2cget</td><td>0x3500~0x3502</td><td><code>i2cget -y 3 0x3c 0x3500</code></td><td>對應 high byte</td></tr>
+<tr><td>5. 查 media graph</td><td>media-ctl -p</td><td>—</td><td><code>media-ctl -p -d /dev/media0</code></td><td>entities + links</td></tr>
+<tr><td>6. 建 link</td><td>media-ctl -l</td><td>—</td><td><code>media-ctl -l "...:0->...:0[1]"</code></td><td>link 設為 active</td></tr>
+</table>
+<div class="callout info"><strong>位元級關鍵：</strong> V4L2 control 是 register 的「語意包裝」。exposure=500 代表 500 lines，對應 OV5640 的 0x3500/0x3501/0x3502。理解這層對應關係是驅動工程師的核心能力。</div>
+
+<h2>4.18 多層疑難排解決策樹</h2>
+<p><strong>決策樹 A：media graph 不完整</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 A</div><pre>media-ctl -p 有 sensor entity 嗎？
+├─ 無 → DT 未描述 sensor 節點
+│  ├─ 檢查 DT overlay 是否含 i2c + sensor
+│  └─ 檢查 compatible 字串是否匹配驅動
+├─ 有但缺 link → 驅動未建 link
+│  ├─ 手動建：media-ctl -l "..."
+│  └─ 檢查 DT 的 port/endpoint 描述
+└─ 有 link 但缺 format → 需手動設定
+   └─ media-ctl -V "...:0[fmt:SRGGB10_1X10/1920x1080]"</pre></div>
+
+<p><strong>決策樹 B：controls 找不到</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 B</div><pre>v4l2-ctl -l 無控制項？
+├─ subdev 節點不存在 → 驅動未 probe
+│  └─ dmesg 看 probe 失敗原因
+├─ subdev 存在但無 controls → 驅動未暴露
+│  └─ 檢查 ov5640.c 的 .s_ctrl 實作
+└─ controls 有但 set 失敗 → register 被鎖
+   └─ 檢查 AEC/AGC auto 模式是否覆蓋手動</pre></div>
+
+<h2>4.19 量測驗證完整 SOP</h2>
+<table>
+<tr><th>步驟</th><th>指令</th><th>預期輸出</th><th>判讀標準</th></tr>
+<tr><td>1. 列出 subdev</td><td><code>ls /dev/v4l-subdev*</code></td><td>subdev0..N</td><td>數量與 DT 一致</td></tr>
+<tr><td>2. 查 controls</td><td><code>v4l2-ctl -d /dev/v4l-subdev0 -l</code></td><td>列出 V4L2_CID_*</td><td>含 exposure/gain/...</td></tr>
+<tr><td>3. 讀 media graph</td><td><code>media-ctl -p -d /dev/media0</code></td><td>entities + links</td><td>sensor → csi → video</td></tr>
+<tr><td>4. 設定 format</td><td><code>media-ctl -V "...:0[fmt:SRGGB10_1X10/1920x1080]"</code></td><td>格式設定成功</td><td>match sensor 能力</td></tr>
+<tr><td>5. 建 link</td><td><code>media-ctl -l "...:0->...:0[1]"</code></td><td>link 設為 active</td><td>正確的 pad 端點</td></tr>
+<tr><td>6. 驗證控制</td><td><code>v4l2-ctl -d subdev0 --set-ctrl=exposure=500</code></td><td>值已設定</td><td>回讀確認</td></tr>
+</table>
+
+<h2>4.20 四平台終極對照</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th><th>推薦</th></tr>
+<tr><td>驅動框架</td><td>V4L2 subdev</td><td>libcamera</td><td>NVIDIA 自有</td><td>Holoscan</td><td>底層→V4L2</td></tr>
+<tr><td>subdev 節點</td><td>/dev/v4l-subdevN</td><td>libcamera 抽象</td><td>內部抽象</td><td>內部抽象</td><td>除錯→Orange Pi</td></tr>
+<tr><td>controls</td><td>V4L2_CID_*</td><td>libcamera controls</td><td>Argus SensorMode</td><td>Holoscan 參數</td><td>底層→V4L2</td></tr>
+<tr><td>media controller</td><td>✅ 開放</td><td>libcamera 抽象</td><td>封閉</td><td>封閉</td><td>學習→Orange Pi</td></tr>
+<tr><td>可移植性</td><td>Linux 標準</td><td>RPi 專屬但開源</td><td>NVIDIA 專屬</td><td>NVIDIA 新世代</td><td>通用→V4L2</td></tr>
+</table>
+
+<h2>4.21 完整 Bring-up 專案 Checklist</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 確認所有 /dev/v4l-subdev* 節點存在
+- [ ] 用 v4l2-ctl -l 列出全部 controls 與範圍
+- [ ] 用 media-ctl -p 確認完整 media graph
+- [ ] 手動建 link 並設定 format
+- [ ] 用 v4l2-ctl 設定 exposure 並回讀驗證
+- [ ] 追蹤 /sys 下的驅動綁定鏈
+- [ ] 產出「platform inventory」（subdev/video/controls/media）
+- [ ] 確認 libcamera / Argus / V4L2 的抽象差異
+- [ ] 驗證 DT overlay 描述與實際 media graph 一致
+- [ ] 用 dmesg 追蹤 probe 回呼序列</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>V4L2 subdev 與 media 管線。</li><li>ov5640.c 是 Linux 驅動範本。</li><li>V4L2 controls 是 register 的抽象。</li><li>media-ctl/v4l2-ctl 查管線與 controls。</li><li>subdev 生命週期回呼與硬體狀態對應。</li><li>節點與管線對不上的排解方向。</li></ul>

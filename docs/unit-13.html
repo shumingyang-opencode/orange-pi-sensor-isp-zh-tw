@@ -242,6 +242,74 @@ EOF</pre></div>
 - [ ] 我已用時域平均驗證 SNR 提升（多幀 +6dB）。
 - [ ] 我知道如何在四平台對應 NR 策略（硬體/後處理）。</pre></div>
 
+  <h2>13.22 Register 位元級完整工作流</h2>
+<p>雜訊管理的「讀→改→寫→驗證」是影像品質的關鍵。以下是 OV5640 的位元級操作序列：</p>
+<table class="reg-table">
+<tr><th>步驟</th><th>暫存器/位址</th><th>位元欄位</th><th>操作</th><th>預期值</th></tr>
+<tr><td>1. 開啟 DPC</td><td>0x5080</td><td>[0] DPC enable</td><td><code>i2cset -y 3 0x3c 0x5080 0x01</code></td><td>DPC 開啟</td></tr>
+<tr><td>2. 設定 DPC 閾值</td><td>0x5081</td><td>[7:0] threshold</td><td><code>i2cset ... 0x5081 0x10</code></td><td>依雜訊程度</td></tr>
+<tr><td>3. 開啟 NR</td><td>0x5300</td><td>[0] NR enable</td><td><code>i2cset ... 0x5300 0x01</code></td><td>NR 開啟</td></tr>
+<tr><td>4. 設定 NR 強度</td><td>0x5301</td><td>[7:0] strength</td><td><code>i2cset ... 0x5301 0x20</code></td><td>依需求</td></tr>
+<tr><td>5. 回讀驗證</td><td>0x5080 / 0x5300</td><td>[0]</td><td><code>i2cget ... 0x5080; i2cget ... 0x5300</code></td><td>兩者皆 = 0x01</td></tr>
+<tr><td>6. 取幀對比</td><td>v4l2-ctl</td><td>—</td><td>拍兩幀（NR on/off）</td><td>雜訊減少</td></tr>
+</table>
+<div class="callout info"><strong>位元級關鍵：</strong> DPC（去壞點）必須在 NR 之前做。DPC 移除孤立的壞點；NR 平滑剩餘雜訊。順序錯誤會導致壞點被 NR 放大。</div>
+
+<h2>13.23 多層疑難排解決策樹</h2>
+<p><strong>決策樹 A：雜訊太重</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 A</div><pre>影像雜訊太重？
+├─ 增益太高 → 減少 analog gain
+│  └─ 測試 gain=1/2/4/8 的 SNR
+├─ 暗場 → 增加曝光（拉亮場景）
+│  └─ 或用時域平均（多幀堆疊）
+├─ NR 強度不足 → 增加 0x5301 值
+│  └─ 但注意細節會被抹掉
+└─ 有壞點 → 先開 DPC
+   └─ 0x5080=0x01, 0x5081 調閾值</pre></div>
+
+<p><strong>決策樹 B：NR 抹掉細節</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 B</div><pre>NR 後細節模糊？
+├─ NR 強度太高 → 減少 0x5301 值
+├─ 改用時域平均（不傷細節）
+│  └─ 多幀堆疊：SNR 提升 6dB/倍數
+├─ 改用空間 NR 的低強度
+│  └─ 取捨：雜訊 vs 細節
+└─ 接受限制
+   └─ 記錄「NR 強度 vs 細節」的取捨</pre></div>
+
+<h2>13.24 量測驗證完整 SOP</h2>
+<table>
+<tr><th>步驟</th><th>指令</th><th>預期輸出</th><th>判讀標準</th></tr>
+<tr><td>1. 量測 SNR</td><td>Python script（signal/noise）</td><td>SNR 值（dB）</td><td>依增益</td></tr>
+<tr><td>2. 關閉 NR</td><td><code>i2cset ... 0x5300 0x00</code></td><td>無降噪</td><td>基準雜訊</td></tr>
+<tr><td>3. 開啟 NR</td><td><code>i2cset ... 0x5300 0x01; i2cset ... 0x5301 0x20</code></td><td>降噪</td><td>雜訊減少</td></tr>
+<tr><td>4. 量測後 SNR</td><td>Python script</td><td>SNR 值</td><td>提升 > 3dB</td></tr>
+<tr><td>5. 測 DPC</td><td><code>i2cset ... 0x5080 0x01</code></td><td>壞點移除</td><td>孤立壞點消失</td></tr>
+<tr><td>6. 時域平均</td><td>多幀堆疊 Python</td><td>SNR 提升</td><td>+6dB/倍數</td></tr>
+</table>
+
+<h2>13.25 四平台終極對照</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th><th>推薦</th></tr>
+<tr><td>DPC</td><td>OV5640 內建</td><td>ISP 內建</td><td>ISP 內建</td><td>ISP 內建</td><td>底層→OV5640</td></tr>
+<tr><td>空間 NR</td><td>OV5640 內建</td><td>ISP 內建</td><td>NVIDIA NR</td><td>NVIDIA NR</td><td>學習→OV5640</td></tr>
+<tr><td>後處理 NR</td><td>OpenCV fastNlMeans</td><td>libcamera 後期</td><td>可選</td><td>Holoscan</td><td>底層→OpenCV</td></tr>
+<tr><td>時域平均</td><td>自寫 Python</td><td>libcamera 支援</td><td>可選</td><td>可選</td><td>學習→Python</td></tr>
+<tr><td>NR 控制</td><td>參數開放</td><td>開源可改</td><td>封閉</td><td>封閉</td><td>學習→Orange Pi</td></tr>
+</table>
+
+<h2>13.26 完整 Bring-up 專案 Checklist</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 完成「雜訊管理專案」並產出雜訊管理表
+- [ ] 量測各增益的 SNR 並訂出增益上限
+- [ ] 驗證「拉增益不改善 SNR」的數學原理
+- [ ] 遵守「DPC 先、NR 後」的順序
+- [ ] 用時域平均驗證 SNR 提升（多幀 +6dB）
+- [ ] 在四平台對應 NR 策略（硬體/後處理）
+- [ ] 產出「NR tuning report」（含 SNR/增益/細節取捨）
+- [ ] 測試 DPC 閾值對壞點移除的影響
+- [ ] 測試 NR 強度對細節的影響
+- [ ] 產出「雜訊管理表」（SNR/增益/NR/quality）</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>四種雜訊來源。</li><li>OV5640 DPC 角色。</li><li>Orange Pi 降噪三策略。</li><li>降噪與細節取捨。</li></ul>

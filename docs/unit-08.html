@@ -221,6 +221,74 @@ EOF</pre></div>
 - [ ] 我已驗證本平台在主要解析度的 Bayer order 一致性。
 - [ ] 我能用「位元深 + Bayer order」描述任何平台的 RAW 格式。</pre></div>
 
+  <h2>8.22 Register 位元級完整工作流</h2>
+<p>RAW 格式的「讀→改→寫→驗證」是影像品質分析的基礎。以下是完整的位元級序列：</p>
+<table class="reg-table">
+<tr><th>步驟</th><th>暫存器/位址</th><th>位元欄位</th><th>操作</th><th>預期值</th></tr>
+<tr><td>1. 讀輸出格式</td><td>0x3808~0x380B</td><td>[15:0] width, [15:0] height</td><td><code>i2cget ... 0x3808; i2cget ... 0x3809</code></td><td>依解析度</td></tr>
+<tr><td>2. 設定 RAW 格式</td><td>v4l2-ctl pixelformat</td><td>—</td><td><code>v4l2-ctl --set-fmt-video=pixelformat=SRGGB10</code></td><td>格式設定成功</td></tr>
+<tr><td>3. 驗證 sizeimage</td><td>file size</td><td>—</td><td><code>ls -l stream.raw</code></td><td>= width × height × 1.25</td></tr>
+<tr><td>4. 驗證 bytesperline</td><td>V4L2 format</td><td>—</td><td><code>v4l2-ctl --list-formats-ext</code></td><td>依解析度對齊</td></tr>
+<tr><td>5. 讀 Bayer order</td><td>0x4300</td><td>[3:0] format</td><td><code>i2cget ... 0x4300</code></td><td>SRGGB10</td></tr>
+<tr><td>6. 驗證 RAW 資料</td><td>Python script</td><td>—</td><td><code>raw_verify.py stream.raw</code></td><td>Bayer 資料正確</td></tr>
+</table>
+<div class="callout info"><strong>位元級關鍵：</strong> sizeimage 的計算：SRGGB10 = 10bit → 1.25 bytes/pixel。1920×1080×1.25 = 2,592,000 bytes。若檔案大小不符，代表格式設定錯誤或 bytesperline 對齊異常。</div>
+
+<h2>8.23 多層疑難排解決策樹</h2>
+<p><strong>決策樹 A：RAW 檔案大小異常</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 A</div><pre>ls -l stream.raw
+├─ 太大 → format 錯誤
+│  ├─ 檢查 pixelformat 設定
+│  └─ 換 SRGGB10P（packed）vs SRGGB10（unpacked）
+├─ 太小 → format 錯誤
+│  └─ 可能誤設 YUYV（4 bytes/pixel）
+└─ 正確 → 格式正確
+   └─ 繼續驗證 Bayer 資料</pre></div>
+
+<p><strong>決策樹 B：RAW 斜圖或色偏</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 B</div><pre>RAW 圖像異常？
+├─ 斜圖 → bytesperline 對齊問題
+│  ├─ 用 Python 確認 bytesperline
+│  └─ 調整 width 對齊（16/64 byte）
+├─ 色偏 → Bayer order 錯誤
+│  ├─ 嘗試四種 order（RGGB/GRBG/GBRG/BGGR）
+│  └─ 用四通道均值法驗證
+└─ 正常 → 格式正確
+   └─ 進階：用 RAW 做 OB/黑位分析</pre></div>
+
+<h2>8.24 量測驗證完整 SOP</h2>
+<table>
+<tr><th>步驟</th><th>指令</th><th>預期輸出</th><th>判讀標準</th></tr>
+<tr><td>1. 列出格式</td><td><code>v4l2-ctl --list-formats-ext</code></td><td>SRGGB10/8/12</td><td>依 sensor 能力</td></tr>
+<tr><td>2. 設定格式</td><td><code>v4l2-ctl --set-fmt-video=pixelformat=SRGGB10</code></td><td>格式設定成功</td><td>match sensor</td></tr>
+<tr><td>3. 取 RAW</td><td><code>v4l2-ctl --stream-mmap=1 --stream-count=1</code></td><td>RAW 檔</td><td>sizeimage 正確</td></tr>
+<tr><td>4. 驗證大小</td><td><code>ls -l stream.raw</code></td><td>= W × H × 1.25</td><td>SRGGB10 計算正確</td></tr>
+<tr><td>5. 驗證 Bayer</td><td><code>python3 raw_check.py stream.raw</code></td><td>Bayer 資料正確</td><td>四通道均值合理</td></tr>
+<tr><td>6. 測 bytesperline</td><td><code>v4l2-ctl --list-formats-ext | grep bytesperline</code></td><td>依解析度</td><td>16/64 byte 對齊</td></tr>
+</table>
+
+<h2>8.25 四平台終極對照</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th><th>推薦</th></tr>
+<tr><td>RAW 位元深</td><td>8/10/12</td><td>10/12</td><td>10/12/14</td><td>10/12/14</td><td>動態範圍→14-bit</td></tr>
+<tr><td>取 RAW 方式</td><td>v4l2-ctl pixelformat</td><td>rpicam --raw</td><td>argus / nvgst</td><td>Holoscan</td><td>底層→v4l2-ctl</td></tr>
+<tr><td>format 工具</td><td>V4L2 fourcc</td><td>libcamera 描述</td><td>NVIDIA 專屬</td><td>NVIDIA 專屬</td><td>通用→fourcc</td></tr>
+<tr><td>bytesperline</td><td>16/64 byte</td><td>16 byte</td><td>NVIDIA 對齊</td><td>NVIDIA 對齊</td><td>依解析度</td></tr>
+<tr><td>Bayer 驗證</td><td>自寫 Python</td><td>libcamera</td><td>NVIDIA 工具</td><td>Holoscan</td><td>學習→Python</td></tr>
+</table>
+
+<h2>8.26 完整 Bring-up 專案 Checklist</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 用 v4l2-ctl --list-formats-ext 列出所有支援格式
+- [ ] 設定 SRGGB10 格式取 RAW
+- [ ] 驗證 sizeimage = width × height × 1.25
+- [ ] 用 Python 確認 bytesperline 對齊
+- [ ] 用四通道均值法驗證 Bayer order
+- [ ] 測試 SRGGB10 vs SRGGB10P 的檔案大小差異
+- [ ] 測試 YUYV / NV12 / RAW 的 sizeimage 計算
+- [ ] 產出「格式能力表」（format/size/bytesperline）
+- [ ] 驗證本平台在主要解析度的 Bayer order 一致性
+- [ ] 用「位元深 + Bayer order」描述任何平台的 RAW 格式</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>V4L2 fourcc 與 RAW/YUV 路線。</li><li>查感測器支援格式。</li><li>Bayer order 陷阱。</li><li>固定格式/解析度調校。</li><li>RAW packing 與 bytesperline 對齊。</li><li>正確讀取 RAW buffer 的 Worked Example。</li><li>YUV/NV12 布局與 sizeimage 驗證。</li></ul>

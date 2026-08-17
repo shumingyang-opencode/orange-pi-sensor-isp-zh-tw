@@ -208,6 +208,74 @@ EOF</pre></div>
 - [ ] 我理解「先快門 → 增益 → 數位增益」的物理依據。
 - [ ] 我能驗證 AEC 收斂並記錄收斂時間。</pre></div>
 
+  <h2>10.21 Register 位元級完整工作流</h2>
+<p>曝光控制是 ISP 調校的核心。以下是 OV5640 曝光控制的位元級完整序列：</p>
+<table class="reg-table">
+<tr><th>步驟</th><th>暫存器/位址</th><th>位元欄位</th><th>操作</th><th>預期值</th></tr>
+<tr><td>1. 開啟手動 AEC</td><td>0x3503</td><td>[0] AEC manual</td><td><code>i2cset -y 3 0x3c 0x3503 0x08</code></td><td>0x08（手動）</td></tr>
+<tr><td>2. 設定 exposure high</td><td>0x3500</td><td>[7:4] exposure[19:16]</td><td><code>i2cset -y 3 0x3c 0x3500 0x01</code></td><td>依場景</td></tr>
+<tr><td>3. 設定 exposure mid</td><td>0x3501</td><td>[7:0] exposure[15:8]</td><td><code>i2cset -y 3 0x3c 0x3501 0xF4</code></td><td>500 lines</td></tr>
+<tr><td>4. 設定 exposure low</td><td>0x3502</td><td>[7:0] exposure[7:0]</td><td><code>i2cset -y 3 0x3c 0x3502 0x00</code></td><td>0x00</td></tr>
+<tr><td>5. 設定 analog gain</td><td>0x350A</td><td>[1:0] gain</td><td><code>i2cset -y 3 0x3c 0x350a 0x00</code></td><td>1× gain</td></tr>
+<tr><td>6. 回讀驗證</td><td>0x3503</td><td>[0]</td><td><code>i2cget -y 3 0x3c 0x3503</code></td><td>0x08</td></tr>
+<tr><td>7. 取幀驗證</td><td>v4l2-ctl</td><td>—</td><td><code>v4l2-ctl --stream-mmap=1 --stream-count=1</code></td><td>亮度符合預期</td></tr>
+</table>
+<div class="callout info"><strong>位元級關鍵：</strong> OV5640 的曝光是 20-bit（0x3500~0x3502），500 lines = 0x01F400。每 line ≈ 29.6µs @ 1080p30。先快門→類比增益→數位增益的順序是物理鐵律。</div>
+
+<h2>10.22 多層疑難排解決策樹</h2>
+<p><strong>決策樹 A：AEC 收斂太慢</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 A</div><pre>AEC 收斂時間異常？
+├─ 太慢（>500ms）
+│  ├─ 增加 AEC 響應速度：0x3A0F/0x3A10
+│  └─ 減少收斂範圍：0x3A1D/0x3A1E
+├─ 太快（oscillating）
+│  ├─ 降低響應速度
+│  └─ 增加收斂範圍
+└─ 不收斂 → AEC 被覆蓋
+   └─ 檢查 0x3503 是否為 0x00（auto）</pre></div>
+
+<p><strong>決策樹 B：日光燈頻閃</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 B</div><pre>影像有橫向條紋？
+├─ 50Hz 頻閃 → 曝光非整數倍
+│  ├─ 計算：1/50s = 20ms → 20ms / 29.6µs ≈ 676 lines
+│  └─ 設定 exposure = 676 × N（N=1,2,3...）
+├─ 60Hz 頻閃 → 同理
+│  └─ 1/60s = 16.67ms → 563 lines × N
+└─ 無頻閃 → 正常</pre></div>
+
+<h2>10.23 量測驗證完整 SOP</h2>
+<table>
+<tr><th>步驟</th><th>指令</th><th>預期輸出</th><th>判讀標準</th></tr>
+<tr><td>1. 開啟手動 AEC</td><td><code>i2cset -y 3 0x3c 0x3503 0x08</code></td><td>手動模式</td><td>0x3503 = 0x08</td></tr>
+<tr><td>2. 設定 exposure</td><td><code>i2cset ... 0x3500 0x01; i2cset ... 0x3501 0xF4</code></td><td>500 lines</td><td>對應亮度</td></tr>
+<tr><td>3. 設定 gain</td><td><code>i2cset ... 0x350a 0x00</code></td><td>1× gain</td><td>最低雜訊</td></tr>
+<tr><td>4. 取幀</td><td><code>v4l2-ctl --stream-mmap=1 --stream-count=1</code></td><td>成功</td><td>亮度符合預期</td></tr>
+<tr><td>5. 掃描增益上限</td><td>遞增 0x350a 值</td><td>雜訊增加</td><td>訂出增益上限</td></tr>
+<tr><td>6. 測 AEC 收斂</td><td>切換 auto（0x3503=0x00）</td><td>收斂時間</td><td>&lt;500ms</td></tr>
+</table>
+
+<h2>10.24 四平台終極對照</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th><th>推薦</th></tr>
+<tr><td>曝光單位</td><td>lines</td><td>µs</td><td>µs</td><td>µs</td><td>先換算 row 週期</td></tr>
+<tr><td>增益控制</td><td>0x350A（整數）</td><td>AnalogueGain（浮點）</td><td>NVIDIA AE</td><td>NVIDIA AE</td><td>依平台</td></tr>
+<tr><td>AEC</td><td>感測器內建</td><td>libcamera AE</td><td>NVIDIA AE</td><td>NVIDIA AE</td><td>底層→感測器</td></tr>
+<tr><td>頻閃/banding</td><td>手動控制</td><td>libcamera 支援</td><td>NVIDIA 支援</td><td>NVIDIA 支援</td><td>底層→手動</td></tr>
+<tr><td>收斂速度</td><td>可調（register）</td><td>tuning 可調</td><td>封閉</td><td>封閉</td><td>學習→Orange Pi</td></tr>
+</table>
+
+<h2>10.25 完整 Bring-up 專案 Checklist</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 完成「曝光調校專案」並產出曝光曲線
+- [ ] 換算 lines ↔ µs（用 row 週期：1 line ≈ 29.6µs @ 1080p30）
+- [ ] 訂出本應用的曝光上限（exposure_max lines）
+- [ ] 訂出類比增益上限（gain_max）
+- [ ] 測 AEC 收斂時間（< 500ms 為佳）
+- [ ] 測日光燈頻閃：找安全曝光區間（676 × N lines @ 50Hz）
+- [ ] 驗證「先快門 → 增益 → 數位增益」的順序
+- [ ] 產出「exposure tuning log」（含 gain/exposure/time/quality）
+- [ ] 確認 AEC 收斂後亮度穩定無 oscillation
+- [ ] 測試「補光 vs 硬調」取捨並記錄</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>曝光三要素與 register。</li><li>V4L2 controls 控制曝光。</li><li>AEC 收斂與上下限。</li><li>「補光 vs 硬調」取捨。</li></ul>

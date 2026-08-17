@@ -274,6 +274,70 @@ EOF</pre></div>
 - [ ] 我已跑過至少三個場景的回歸並記錄結果。
 - [ ] 我理解「可重現調校 = 完整 log + 版本管理」。</pre></div>
 
+  <h2>14.21 Register 位元級完整工作流</h2>
+<p>清晰度/HDR/調校工作流的「讀→改→寫→驗證」是影像品質的關鍵：</p>
+<table class="reg-table">
+<tr><th>步驟</th><th>暫存器/位址</th><th>位元欄位</th><th>操作</th><th>預期值</th></tr>
+<tr><td>1. 開啟 sharpen</td><td>0x5308</td><td>[0] sharpen enable</td><td><code>i2cset -y 3 0x3c 0x5308 0x01</code></td><td>sharpen 開啟</td></tr>
+<tr><td>2. 設定 sharpen 強度</td><td>0x5309</td><td>[7:0] strength</td><td><code>i2cset ... 0x5309 0x20</code></td><td>依需求</td></tr>
+<tr><td>3. 開啟 gamma</td><td>0x5300</td><td>[0] gamma enable</td><td><code>i2cset ... 0x5300 0x01</code></td><td>gamma 開啟</td></tr>
+<tr><td>4. 設定 contrast</td><td>0x5301</td><td>[7:0] contrast</td><td><code>i2cset ... 0x5301 0x20</code></td><td>依需求</td></tr>
+<tr><td>5. 回讀驗證</td><td>0x5308 / 0x5309</td><td>[7:0]</td><td><code>i2cget ... 0x5308; i2cget ... 0x5309</code></td><td>兩者皆正確</td></tr>
+<tr><td>6. 取幀對比</td><td>v4l2-ctl</td><td>—</td><td>拍兩幀（sharpen on/off）</td><td>清晰度改善</td></tr>
+</table>
+<div class="callout info"><strong>位元級關鍵：</strong> sharpen 會放大雜訊。必須先降噪（NR）再 sharpen。順序：DPC → NR → Sharpen → Contrast。這是調校工作流的「鐵律順序」。</div>
+
+<h2>14.22 多層疑難排解決策樹</h2>
+<p><strong>決策樹 A：影像模糊</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 A</div><pre>影像模糊？
+├─ sharpen 未開啟 → 0x5308=0x01
+├─ sharpen 強度不足 → 增加 0x5309 值
+├─ NR 抹掉細節 → 減少 NR 強度
+└─ 對焦問題 → 物理對焦（不是 ISP 問題）</pre></div>
+
+<p><strong>決策樹 B：HDR 效果不明顯</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 B</div><pre>HDR 效果不明顯？
+├─ 場景動態範圍不夠大
+│  └─ 測試高對比場景（逆光/窗戶）
+├─ 曝光包圍不夠 → 增加 EV 檔數
+│  └─ 嘗試 -2EV/0EV/+2EV
+├─ 合成方法問題 → 換 HDR 合成算法
+└─ OV5640 DOL HDR 未啟用
+   └─ 檢查 DT 與驅動支援</pre></div>
+
+<h2>14.23 量測驗證完整 SOP</h2>
+<table>
+<tr><th>步驟</th><th>指令</th><th>預期輸出</th><th>判讀標準</th></tr>
+<tr><td>1. 關閉 sharpen</td><td><code>i2cset ... 0x5308 0x00</code></td><td>無 sharpen</td><td>基準清晰度</td></tr>
+<tr><td>2. 開啟 sharpen</td><td><code>i2cset ... 0x5308 0x01; i2cset ... 0x5309 0x20</code></td><td>sharpen on</td><td>清晰度改善</td></tr>
+<tr><td>3. 量測 MTF</td><td>Python script（邊緣擴散）</td><td>MTF 值</td><td>sharpen 後提升</td></tr>
+<tr><td>4. 測動態範圍</td><td>灰階圖 + Python</td><td>DR 值（EV）</td><td>依場景</td></tr>
+<tr><td>5. 測 HDR</td><td>高對比場景</td><td>HDR 影像</td><td>亮暗細節保留</td></tr>
+<tr><td>6. 測調校工作流</td><td>照順序執行五步</td><td>最終影像</td><td>品質最佳</td></tr>
+</table>
+
+<h2>14.24 四平台終極對照</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th><th>推薦</th></tr>
+<tr><td>Sharpen</td><td>OV5640 內建</td><td>ISP 內建</td><td>NVIDIA sharpen</td><td>NVIDIA sharpen</td><td>學習→OV5640</td></tr>
+<tr><td>HDR</td><td>OV5640 DOL（有限）</td><td>ISP HDR</td><td>NVIDIA HDR</td><td>NVIDIA HDR</td><td>量產→NVIDIA</td></tr>
+<tr><td>調校工具</td><td>自建 JSON/CSV</td><td>libcamera tuning</td><td>NVIDIA 工具</td><td>NVIDIA 工具</td><td>底層→自建</td></tr>
+<tr><td>回歸工具</td><td>自寫腳本</td><td>libcamera test</td><td>NVIDIA test</td><td>NVIDIA test</td><td>底層→自寫</td></tr>
+<tr><td>自動化</td><td>完全自建</td><td>半自動</td><td>高（封閉）</td><td>高（封閉）</td><td>學習→自建</td></tr>
+</table>
+
+<h2>14.25 完整 Bring-up 專案 Checklist</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 完成「tune.sh 自動化調校專案」並產出 log
+- [ ] 建立 raw/params/out/log 專案結構
+- [ ] 遵守「黑位→LSC→AWB/CCM→曝光→美化」的順序
+- [ ] 量測場景動態範圍並判斷要不要 HDR
+- [ ] 跑過至少三個場景的回歸並記錄結果
+- [ ] 驗證「可重現調校 = 完整 log + 版本管理」
+- [ ] 測試 sharpen 對清晰度的影響（含雜訊副作用）
+- [ ] 測試 contrast 對動態範圍的影響
+- [ ] 產出「tuning workflow report」（含五步序列/回歸/品質）
+- [ ] 用「先 RAW 對、再後處理」原則驗證</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>Sharpen/Contrast 後處理調校。</li><li>OV5640 DOL HDR 與驅動現況。</li><li>五步調校工作流。</li><li>「先 RAW 對、再後處理」原則。</li></ul>

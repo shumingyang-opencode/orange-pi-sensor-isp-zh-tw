@@ -224,6 +224,71 @@ ls -l rgb.yuv ir.yuv
 - [ ] 我能說明 virtual channel 與獨立 lanes 的差異。
 - [ ] 我已驗證多路 10 分鐘長期穩定無掉幀。</pre></div>
 
+  <h2>16.20 Register 位元級完整工作流</h2>
+<p>多感測器與實作案例的「讀→改→寫→驗證」是進階應用的基礎：</p>
+<table class="reg-table">
+<tr><th>步驟</th><th>操作</th><th>指令</th><th>預期值</th></tr>
+<tr><td>1. 掃描所有 I2C</td><td>i2cdetect -y 3</td><td><code>i2cdetect -y 3</code></td><td>兩顆感測器位址</td></tr>
+<tr><td>2. 讀第一顆 ID</td><td>0x300A + 0x300B</td><td><code>i2cget -y 3 0x3c 0x300a</code></td><td>0x56</td></tr>
+<tr><td>3. 讀第二顆 ID</td><td>0x300A + 0x300B</td><td><code>i2cget -y 3 0x3c 0x300a</code>（不同 bus）</td><td>0x56</td></tr>
+<tr><td>4. 建兩路 media link</td><td>media-ctl -l</td><td><code>media-ctl -l "...; ..."</code></td><td>兩條 link active</td></tr>
+<tr><td>5. 設定兩路 format</td><td>media-ctl -V</td><td><code>media-ctl -V "...; ..."</code></td><td>兩路格式正確</td></tr>
+<tr><td>6. 同時取流</td><td>v4l2-ctl</td><td><code>v4l2-ctl --stream-mmap=1 -d /dev/video0 &amp; v4l2-ctl ... -d /dev/video1</code></td><td>兩路同時成功</td></tr>
+</table>
+<div class="callout info"><strong>位元級關鍵：</strong> 多感測器的關鍵是「獨立 I2C bus + 獨立 CSI receiver + 獨立 video device」。先確認每顆的 I2C 位址不衝突，再依序建立 link。</div>
+
+<h2>16.21 多層疑難排解決策樹</h2>
+<p><strong>決策樹 A：兩路同時取流失敗</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 A</div><pre>兩路同時取流？
+├─ 一路成功一路失敗
+│  ├─ 失敗的那路 I2C 問題 → i2cdetect 確認
+│  └─ CSI receiver 不足 → 檢查 DT lane 數
+├─ 兩路都失敗
+│  ├─ DDR 頻寬不足 → 降低解析度
+│  └─ ISP 處理量不足 → 嘗試不同組合
+└─ 兩路成功但掉幀
+   └─ 用「先單路→再並行→二分法」找瓶頸</pre></div>
+
+<p><strong>決策樹 B：客製 OV 接入四步</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 B</div><pre>新感測器接入四步：
+├─ 1. I2C 位址確認 → i2cdetect
+├─ 2. DT overlay 建立 → i2c + sensor 節點
+├─ 3. 驅動 probe → dmesg 看 probe 結果
+└─ 4. media graph 建立 → media-ctl -l -V</pre></div>
+
+<h2>16.22 量測驗證完整 SOP</h2>
+<table>
+<tr><th>步驟</th><th>指令</th><th>預期輸出</th><th>判讀標準</th></tr>
+<tr><td>1. 掃描 I2C</td><td><code>i2cdetect -y 3</code></td><td>兩顆感測器</td><td>位址不衝突</td></tr>
+<tr><td>2. 讀兩顆 ID</td><td><code>i2cget -y 3 0x3c 0x300a</code></td><td>0x56 + 0x56</td><td>兩顆都正常</td></tr>
+<tr><td>3. 建兩路 link</td><td><code>media-ctl -l</code></td><td>兩條 link active</td><td>正確 pad</td></tr>
+<tr><td>4. 設定兩路 format</td><td><code>media-ctl -V</code></td><td>兩路格式正確</td><td>依各感測器能力</td></tr>
+<tr><td>5. 同時取流</td><td><code>v4l2-ctl --stream-mmap=1 &amp; v4l2-ctl ...</code></td><td>兩路成功</td><td>無 timeout</td></tr>
+<tr><td>6. 長期穩定</td><td>10 分鐘測試</td><td>無掉幀</td><td>穩定</td></tr>
+</table>
+
+<h2>16.23 四平台終極對照</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th><th>推薦</th></tr>
+<tr><td>CSI 接收器</td><td>4× / 1×</td><td>2× (4-lane)</td><td>多路 CSI</td><td>多路 CSI</td><td>多相機→RK3588</td></tr>
+<tr><td>同時取流</td><td>可行（RK3588）</td><td>可行</td><td>可行</td><td>可行</td><td>多路→RK3588</td></tr>
+<tr><td>工具</td><td>media-ctl 逐路</td><td>libcamera multi</td><td>Argus multi</td><td>Holoscan multi</td><td>底層→media-ctl</td></tr>
+<tr><td>頻寬瓶頸</td><td>DDR 為主</td><td>ISP/記憶體</td><td>強（多路 4K）</td><td>最強（多路）</td><td>高解析→NVIDIA</td></tr>
+<tr><td>學習成本</td><td>中（完全手動）</td><td>低（libcamera）</td><td>低（封裝好）</td><td>低（封裝好）</td><td>學習→Orange Pi</td></tr>
+</table>
+
+<h2>16.24 完整 Bring-up 專案 Checklist</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 完成「多相機 bring-up」專案並讓兩路同時取流
+- [ ] 列出每顆感測器的 bus、位址、video node 對應
+- [ ] 用「單路→並行→二分法」排查多相機問題
+- [ ] 計算兩路同時取流的總頻寬需求
+- [ ] 說明 virtual channel 與獨立 lanes 的差異
+- [ ] 驗證多路 10 分鐘長期穩定無掉幀
+- [ ] 用客製 OV 四步接入新感測器
+- [ ] 產出「multi-camera setup guide」
+- [ ] 用二分法找頻寬瓶頸
+- [ ] 產出「multi-camera stability report」</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>多相機 media 管線。</li><li>客製 OV 接入四步。</li><li>Orange Pi 調校 OV5640 完整案例。</li><li>最佳實踐。</li></ul>

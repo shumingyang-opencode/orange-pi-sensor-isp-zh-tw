@@ -229,6 +229,84 @@ ls -l first.yuv   <span class="hl-c"># 1,843,200 bytes</span></pre></div>
 - [ ] 我理解 t_PW_UP 為何是「register 寫不進去」的隱藏殺手。
 - [ ] 我能把 bring-up 知識應用於不同 SoC（RK3588 vs H618）。</pre></div>
 
+  <h2>6.22 Register 位元級完整工作流</h2>
+<p>Sensor bring-up 的「讀→改→寫→驗證」是驅動工程師的核心技能。以下是完整的位元級序列：</p>
+<table class="reg-table">
+<tr><th>步驟</th><th>暫存器/位址</th><th>位元欄位</th><th>操作</th><th>預期值</th></tr>
+<tr><td>1. 確認電源</td><td>GPIO debug</td><td>AVDD/DVDD level</td><td><code>cat /sys/kernel/debug/gpio | grep power</code></td><td>high（已上電）</td></tr>
+<tr><td>2. 確認 reset</td><td>GPIO debug</td><td>reset level</td><td><code>cat /sys/kernel/debug/gpio | grep reset</code></td><td>high（已釋放）</td></tr>
+<tr><td>3. 讀 sensor ID</td><td>0x300A + 0x300B</td><td>[7:0]</td><td><code>i2cget -y 3 0x3c 0x300a; i2cget ... 0x300b</code></td><td>0x56 + 0x40</td></tr>
+<tr><td>4. 驗證 PLL</td><td>0x3035</td><td>[7:4]</td><td><code>i2cget ... 0x3035</code></td><td>依 DT clock</td></tr>
+<tr><td>5. 建 media link</td><td>/dev/media0</td><td>—</td><td><code>media-ctl -l "...:0->...:0[1]"</code></td><td>link active</td></tr>
+<tr><td>6. 設定 format</td><td>/dev/media0</td><td>—</td><td><code>media-ctl -V "...:0[fmt:SRGGB10_1X10/1920x1080]"</code></td><td>格式設定成功</td></tr>
+<tr><td>7. 取流驗證</td><td>/dev/video0</td><td>—</td><td><code>v4l2-ctl --stream-mmap=1 --stream-count=1</code></td><td>成功產出檔案</td></tr>
+</table>
+<div class="callout info"><strong>位元級關鍵：</strong> bring-up 的每一步都有「通過/失敗」的明確判據。0x300A=0x56 是 I2C 通的鐵證；dmesg "probe success" 是驅動綁定的鐵證；sizeimage 正確是管線正常的鐵證。</div>
+
+<h2>6.23 多層疑難排解決策樹</h2>
+<p><strong>決策樹 A：probe 失敗</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 A</div><pre>dmesg | grep "probe"
+├─ "probe failed" → 依錯誤：
+│  ├─ "no chip id" → I2C 通但 ID 錯
+│  │  ├─ 嘗試其他 I2C 位址（0x3c/0x36）
+│  │  └─ 確認感測器型號（OV5640 vs OV9281）
+│  ├─ "clk prepare failed" → clock 未就緒
+│  │  └─ 檢查 DT clock-frequency 設定
+│  ├─ "reset" → reset GPIO 問題
+│  │  └─ 檢查 reset-gpios 極性（active-low/high）
+│  └─ "power" → 電源異常
+│     └─ 量測 AVDD/DVDD/DVDD18 電壓
+└─ "probe success" → 驅動綁定成功
+   └─ 檢查 /dev/video* 是否存在</pre></div>
+
+<p><strong>決策樹 B：probe 成功但無圖</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 B</div><pre>v4l2-ctl --stream-mmap=1 --stream-count=1
+├─ 無輸出 → media-ctl 未建 link
+│  └─ 依序：media-ctl -l → media-ctl -V → v4l2-ctl
+├─ 全黑 → sensor 無曝光
+│  ├─ 手動曝光：v4l2-ctl --set-ctrl=exposure=500
+│  └─ 驗證：i2cget 0x3500~0x3502
+├─ 斜圖 → format 錯誤
+│  └─ 檢查 bytesperline 與 Bayer order
+└─ 全白 → 過曝
+   └─ 減少 analog gain：v4l2-ctl --set-ctrl=gain=16</pre></div>
+
+<h2>6.24 量測驗證完整 SOP</h2>
+<table>
+<tr><th>步驟</th><th>指令</th><th>預期輸出</th><th>判讀標準</th></tr>
+<tr><td>1. dmesg probe</td><td><code>dmesg | grep -i "ov5640\|probe"</code></td><td>"probe success"</td><td>無 error/warning</td></tr>
+<tr><td>2. I2C 讀 ID</td><td><code>i2cget -y 3 0x3c 0x300a</code></td><td>0x56</td><td>感測器正常</td></tr>
+<tr><td>3. media graph</td><td><code>media-ctl -p</code></td><td>sensor → csi → video</td><td>完整管線</td></tr>
+<tr><td>4. 設定 format</td><td><code>media-ctl -V</code></td><td>SRGGB10/1920x1080</td><td>正確格式</td></tr>
+<tr><td>5. 建 link</td><td><code>media-ctl -l</code></td><td>link active</td><td>正確 pad</td></tr>
+<tr><td>6. 取一幀</td><td><code>v4l2-ctl --stream-mmap=1 --stream-count=1</code></td><td>成功</td><td>sizeimage 正確</td></tr>
+<tr><td>7. 連續取流</td><td><code>v4l2-ctl --stream-mmap=4 --stream-count=100</code></td><td>100 幀無 error</td><td>穩定無掉幀</td></tr>
+</table>
+
+<h2>6.25 四平台終極對照</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th><th>推薦</th></tr>
+<tr><td>bring-up 難度</td><td>中（完全手動）</td><td>低（libcamera）</td><td>低（封裝好）</td><td>低（封裝好）</td><td>學習→Orange Pi</td></tr>
+<tr><td>除錯深度</td><td>完全可見</td><td>高</td><td>低（封閉）</td><td>低（封閉）</td><td>除錯→Orange Pi</td></tr>
+<tr><td>DT overlay</td><td>dtbo + dtoverlay</td><td>config.txt</td><td>Board config</td><td>Holoscan</td><td>Orange Pi 最透明</td></tr>
+<tr><td>dmesg</td><td>完全開放</td><td>完整</td><td>部分封閉</td><td>部分封閉</td><td>Orange Pi 最佳</td></tr>
+<tr><td>probe 日誌</td><td>dmesg</td><td>dmesg + libcamera</td><td>dmesg（部分）</td><td>dmesg + Holoscan</td><td>Orange Pi 最詳細</td></tr>
+</table>
+
+<h2>6.26 完整 Bring-up 專案 Checklist</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 確認 SoC 型號與 DT overlay
+- [ ] 量測 AVDD/DVDD/DVDD18 電壓
+- [ ] 確認 reset GPIO 極性與時序
+- [ ] 讀取 0x300A + 0x300B 確認 ID
+- [ ] dmesg 確認 "probe success"
+- [ ] 用 media-ctl -p 確認完整管線
+- [ ] 設定 format + 建 link
+- [ ] v4l2-ctl 取一幀驗證 sizeimage
+- [ ] 產出 bringup_log.txt（含所有指令輸出）
+- [ ] 用「電源→clock→reset→I2C→media→出圖」序列除錯
+- [ ] 確認 t_PW_UP 時序（reset 後等 10ms 再 I2C）
+- [ ] 驗證 bring-up 可重現（重啟後複製流程）</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>Bring-up 四件事。</li><li>用 dmesg 追 probe/CSI 錯誤。</li><li>透過 controls 與 i2c 讀 register。</li><li>照決策樹排解。</li></ul>

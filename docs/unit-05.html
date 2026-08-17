@@ -197,6 +197,76 @@ EOF</pre></div>
 - [ ] 我能解釋 mmap buffer 迴圈（REQBUFS→QBUF→DQBUFF）的流程。
 - [ ] 我能指出 YUYV 與 NV12 在 GStreamer 管線中的轉換必要。</pre></div>
 
+  <h2>5.22 Register 位元級完整工作流</h2>
+<p>「第一個鏡頭跑起來」的關鍵是正確設定 V4L2 管線並驗證資料流動。以下是完整的位元級序列：</p>
+<table class="reg-table">
+<tr><th>步驟</th><th>操作</th><th>指令</th><th>預期值</th></tr>
+<tr><td>1. 確認管線</td><td>media-ctl -p</td><td><code>media-ctl -p -d /dev/media0</code></td><td>sensor → csi → video</td></tr>
+<tr><td>2. 設定 format</td><td>media-ctl -V</td><td><code>media-ctl -V "...:0[fmt:SRGGB10_1X10/1920x1080]"</code></td><td>格式設定成功</td></tr>
+<tr><td>3. 建 link</td><td>media-ctl -l</td><td><code>media-ctl -l "...:0->...:0[1]"</code></td><td>link active</td></tr>
+<tr><td>4. 取單幀</td><td>v4l2-ctl</td><td><code>v4l2-ctl --stream-mmap=1 --stream-count=1 -d /dev/video0</code></td><td>成功產出檔案</td></tr>
+<tr><td>5. 驗證 sizeimage</td><td>file size</td><td><code>ls -l stream.raw</code></td><td>sizeimage 正確（依格式）</td></tr>
+<tr><td>6. 連續取流</td><td>v4l2-ctl</td><td><code>v4l2-ctl --stream-mmap=4 --stream-count=100</code></td><td>100 幀無 timeout</td></tr>
+</table>
+<div class="callout info"><strong>位元級關鍵：</strong> sizeimage = width × height × bytes_per_pixel。SRGGB10 = 10bit → 1.25 bytes/pixel。若 sizeimage 不符，代表格式設定錯誤或 buffer 配置異常。</div>
+
+<h2>5.23 多層疑難排解決策樹</h2>
+<p><strong>決策樹 A：stream-on 失敗</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 A</div><pre>v4l2-ctl --stream-mmap=1 --stream-count=1
+├─ "VIDIOC_DQBUF: No such device" → video device 無回應
+│  ├─ 檢查 media-ctl -l → link 是否 active
+│  └─ 檢查 sensor 有無串流（I2C 設定是否完成）
+├─ "timeout" → 無幀到達
+│  ├─ CSI 接收異常 → dmesg 看 csi 錯誤
+│  └─ 嘗試降低解析度（640x480）→ 排除頻寬
+└─ "Invalid argument" → format 不支援
+   └─ 用 media-ctl -V 設定正確格式</pre></div>
+
+<p><strong>決策樹 B：有流但全黑</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 B</div><pre>v4l2-ctl 取到幀但全黑？
+├─ sensor 曝光異常
+│  ├─ 讀 0x3500~0x3502 → 手動曝光是否有效
+│  └─ 用 v4l2-ctl --set-ctrl=exposure=500
+├─ format 錯誤
+│  └─ 換 YUYV 格式測試（排除 Bayer 問題）
+└─ 資料到 video 但後處理問題
+   └─ 用 fakesink 隔離（GStreamer 管線）</pre></div>
+
+<h2>5.24 量測驗證完整 SOP</h2>
+<table>
+<tr><th>步驟</th><th>指令</th><th>預期輸出</th><th>判讀標準</th></tr>
+<tr><td>1. 管線確認</td><td><code>media-ctl -p</code></td><td>sensor → csi → video</td><td>link 正確</td></tr>
+<tr><td>2. 設定格式</td><td><code>media-ctl -V</code></td><td>SRGGB10/1920x1080</td><td>match sensor 能力</td></tr>
+<tr><td>3. 建 link</td><td><code>media-ctl -l</code></td><td>link active</td><td>正確 pad</td></tr>
+<tr><td>4. 取單幀</td><td><code>v4l2-ctl --stream-mmap=1 --stream-count=1</code></td><td>成功</td><td>sizeimage 正確</td></tr>
+<tr><td>5. 驗證格式</td><td><code>file stream.raw | head</code></td><td>依 fourcc</td><td>SRGGB10 header</td></tr>
+<tr><td>6. 連續取流</td><td><code>v4l2-ctl --stream-mmap=4 --stream-count=100</code></td><td>100 幀無 error</td><td>無 timeout/dropped</td></tr>
+<tr><td>7. 頻寬驗證</td><td><code>v4l2-ctl --stream-mmap=4 --stream-count=1000</code></td><td>1000 幀穩定</td><td>長期穩定無掉幀</td></tr>
+</table>
+
+<h2>5.25 四平台終極對照</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th><th>推薦</th></tr>
+<tr><td>取流工具</td><td>v4l2-ctl</td><td>rpicam-vid</td><td>nvgstcapture</td><td>Holoscan</td><td>底層→v4l2-ctl</td></tr>
+<tr><td>media-ctl</td><td>✅ 必用</td><td>libcamera 抽象</td><td>封閉</td><td>封閉</td><td>學習→media-ctl</td></tr>
+<tr><td>GStreamer</td><td>v4l2src</td><td>libcamera 插件</td><td>nvarguscamerasrc</td><td>Holoscan</td><td>通用→GStreamer</td></tr>
+<tr><td>硬體編碼</td><td>MPP（RK3588）</td><td>H.264 HW</td><td>NVENC</td><td>NVENC</td><td>效能→NVENC</td></tr>
+<tr><td>buffer 管理</td><td>REQBUFS/QBUF/DQBUF</td><td>libcamera buffers</td><td>NV 管理</td><td>Holoscan</td><td>底層→V4L2</td></tr>
+</table>
+
+<h2>5.26 完整 Bring-up 專案 Checklist</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 確認 /dev/video0 存在
+- [ ] 用 media-ctl -p 確認完整管線
+- [ ] 設定 format（media-ctl -V）
+- [ ] 建 link（media-ctl -l）
+- [ ] v4l2-ctl 取一幀 YUV 並驗證 sizeimage
+- [ ] 換 SRGGB10 格式取 RAW 並驗證
+- [ ] 用 GStreamer v4l2src 預覽
+- [ ] 連續取 100 幀驗證穩定性
+- [ ] 用 fakesink 隔離「資料流動」與「顯示輸出」
+- [ ] 用 mmap buffer 迴圈理解 REQBUFS→QBUF→DQBUF
+- [ ] 產出「取流能力表」（格式/解析度/fps/stability）</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>用 media-ctl 設定管線連結與格式。</li><li>用 v4l2-ctl 拍照取流。</li><li>用 GStreamer 預覽。</li><li>三種常見失敗的方向。</li></ul>

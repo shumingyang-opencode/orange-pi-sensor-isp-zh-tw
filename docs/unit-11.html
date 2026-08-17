@@ -244,6 +244,76 @@ EOF</pre></div>
 - [ ] 我理解 Orange Pi 整數 gains 與 RPi5 浮點 gains 的換算。
 - [ ] 我能處理混合色溫場景（分區 CCM 或接受限制）。</pre></div>
 
+  <h2>11.22 Register 位元級完整工作流</h2>
+<p>白平衡（AWB）與色彩校正（CCM）的「讀→改→寫→驗證」是色彩準確性的基礎：</p>
+<table class="reg-table">
+<tr><th>步驟</th><th>暫存器/位址</th><th>位元欄位</th><th>操作</th><th>預期值</th></tr>
+<tr><td>1. 開啟 AWB</td><td>0x5183</td><td>[0] AWB enable</td><td><code>i2cset -y 3 0x3c 0x5183 0x01</code></td><td>AWB 開啟</td></tr>
+<tr><td>2. 設定 red gain</td><td>0x5185</td><td>[7:0] red balance</td><td><code>i2cset -y 3 0x3c 0x5185 0x80</code></td><td>1.0×（128=1.0×）</td></tr>
+<tr><td>3. 設定 blue gain</td><td>0x5187</td><td>[7:0] blue balance</td><td><code>i2cset -y 3 0x3c 0x5187 0x80</code></td><td>1.0×</td></tr>
+<tr><td>4. 回讀驗證</td><td>0x5185 / 0x5187</td><td>[7:0]</td><td><code>i2cget ... 0x5185; i2cget ... 0x5187</code></td><td>0x80 + 0x80</td></tr>
+<tr><td>5. 開關 LSC</td><td>0x5800</td><td>[0]</td><td><code>i2cset ... 0x5800 0x00</code></td><td>LSC off（測色彩）</td></tr>
+<tr><td>6. 取幀驗證</td><td>v4l2-ctl</td><td>—</td><td><code>v4l2-ctl --stream-mmap=1 --stream-count=1</code></td><td>色彩平衡正確</td></tr>
+</table>
+<div class="callout info"><strong>位元級關鍵：</strong> OV5640 的 AWB gains 是整數格式：128 = 1.0×。RPi5 的 ColourGains 是浮點比值（1.4）。跨平台移植時，千萬不要直接搬數值——必須先換算定義。</div>
+
+<h2>11.23 多層疑難排解決策樹</h2>
+<p><strong>決策樹 A：白平衡偏色</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 A</div><pre>影像偏色？
+├─ 偏暖（偏紅/橙）→ red gain 太高
+│  ├─ 減少 0x5185 值
+│  └─ 或增加 0x5187（blue gain）
+├─ 偏冷（偏藍）→ blue gain 太高
+│  ├─ 減少 0x5187 值
+│  └─ 或增加 0x5185（red gain）
+├─ 混合色溫 → AWB 無法單一值修正
+│  └─ 接受限制或用分區 CCM
+└─ AWB 完全失效 → 0x5183=0x00
+   └─ 檢查 AWB enable 狀態</pre></div>
+
+<p><strong>決策樹 B：色彩不準（Delta E 太大）</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 B</div><pre>Delta E > 5？
+├─ AWB 正常但色彩不準 → CCM 問題
+│  ├─ 校正 CCM（用灰卡 + 色卡）
+│  └─ 檢查 0x5800~0x5830 的 CCM 係數
+├─ 特定色偏 → 該色域 CCM 係數錯誤
+│  └─ 調整對應 CCM 係數
+└─ 全域色偏 → AWB + CCM 都需校正
+   └─ 先校正 AWB（白變白），再校正 CCM（色變準）</pre></div>
+
+<h2>11.24 量測驗證完整 SOP</h2>
+<table>
+<tr><th>步驟</th><th>指令</th><th>預期輸出</th><th>判讀標準</th></tr>
+<tr><td>1. 用灰卡校正</td><td>拍攝 18% 灰卡</td><td>灰卡影像</td><td>RGB 均值接近</td></tr>
+<tr><td>2. 設定 AWB</td><td><code>i2cset ... 0x5185 0x80; i2cset ... 0x5187 0x80</code></td><td>1.0× gains</td><td>灰卡偏中性</td></tr>
+<tr><td>3. 量測 Delta E</td><td>Python script</td><td>Delta E 值</td><td>&lt; 3（良好）</td></tr>
+<tr><td>4. 調整 gains</td><td>遞增/遞減 0x5185/0x5187</td><td>色彩變化</td><td>最小化 Delta E</td></tr>
+<tr><td>5. 建 LUT</td><td>多光源測試</td><td>awb_lut.csv</td><td>至少兩組色溫</td></tr>
+<tr><td>6. 驗證混合色溫</td><td>拍攝混合光源場景</td><td>影像</td><td>記錄局限</td></tr>
+</table>
+
+<h2>11.25 四平台終極對照</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th><th>推薦</th></tr>
+<tr><td>AWB 控制</td><td>0x5180~0x5190</td><td>libcamera AWB</td><td>NVIDIA AWB</td><td>NVIDIA AWB</td><td>底層→OV5640</td></tr>
+<tr><td>gains 表示</td><td>整數（128=1.0×）</td><td>浮點比值</td><td>NVIDIA 內部</td><td>NVIDIA 內部</td><td>換算時注意定義</td></tr>
+<tr><td>CCM 控制</td><td>0x5800~0x5830</td><td>ColourCorrection</td><td>NVIDIA CCM</td><td>NVIDIA CCM</td><td>學習→OV5640</td></tr>
+<tr><td>混合色溫</td><td>後處理分區</td><td>libcamera 全局</td><td>NVIDIA 分區</td><td>NVIDIA 分區</td><td>接受局限</td></tr>
+<tr><td>色準工具</td><td>自寫 Python</td><td>libcamera 工具</td><td>NVIDIA 工具</td><td>NVIDIA 工具</td><td>學習→Python</td></tr>
+</table>
+
+<h2>11.26 完整 Bring-up 專案 Checklist</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 完成「多光源校正專案」並產出 awb_lut.csv
+- [ ] 用灰卡校正並量化 Delta E
+- [ ] 理解「AWB 讓白變白，CCM 讓彩色變準」
+- [ ] 建立至少兩組色溫的 gains 查表
+- [ ] 換算 Orange Pi 整數 gains（128=1.0×）與 RPi5 浮點 gains
+- [ ] 處理混合色溫場景（分區 CCM 或接受限制）
+- [ ] 產出「色彩校正報告」（含 Delta E 數據）
+- [ ] 驗證 AWB 收斂後色彩穩定
+- [ ] 用色卡（X-Rite）驗證校正效果
+- [ ] 產出「AWB tuning log」（含 gains/Delta E/光源）</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>AWB 原理與 gains。</li><li>OV5640 AWB 與 V4L2 控制。</li><li>灰卡校正流程。</li><li>混合色溫的局限與分層策略。</li></ul>

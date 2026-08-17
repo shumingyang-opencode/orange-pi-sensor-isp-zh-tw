@@ -202,6 +202,71 @@ EOF</pre></div>
 - [ ] 我能說明 RPi5（開源）vs NVIDIA（封閉）的調校路徑差異。
 - [ ] 我遵守「單變數實驗法」並保留每次實驗的備份。</pre></div>
 
+  <h2>7.17 Register 位元級完整工作流</h2>
+<p>ISP 管線的各階段都由 register 控制。以下是 OV5640 內建 ISP 的位元級操作序列：</p>
+<table class="reg-table">
+<tr><th>步驟</th><th>暫存器/位址</th><th>位元欄位</th><th>操作</th><th>預期值</th></tr>
+<tr><td>1. 開啟 ISP</td><td>0x501F</td><td>[0] ISP enable</td><td><code>i2cset -y 3 0x3c 0x501f 0x01</code></td><td>ISP 開啟</td></tr>
+<tr><td>2. 開關 LSC</td><td>0x5800</td><td>[0] LSC enable</td><td><code>i2cset -y 3 0x3c 0x5800 0x01/0x00</code></td><td>LSC on/off</td></tr>
+<tr><td>3. 開關 AWB</td><td>0x5180~0x5190</td><td>[0] AWB enable</td><td><code>i2cset -y 3 0x3c 0x5183 0x01</code></td><td>AWB on</td></tr>
+<tr><td>4. 設定 AEC</td><td>0x3503</td><td>[0] AEC manual</td><td><code>i2cset -y 3 0x3c 0x3503 0x08</code></td><td>手動 AEC</td></tr>
+<tr><td>5. 讀 AEC 結果</td><td>0x3500~0x3502</td><td>[19:8] exposure</td><td><code>i2cget ... 0x3500</code></td><td>依場景</td></tr>
+<tr><td>6. 驗證 ISP 輸出</td><td>v4l2-ctl</td><td>—</td><td><code>v4l2-ctl --stream-mmap=1 --stream-count=1</code></td><td>成功取流</td></tr>
+</table>
+<div class="callout info"><strong>位元級關鍵：</strong> 0x501F 是 OV5640 ISP 的「總開關」。關閉後感測器直出 RAW；開啟後經過 ISP 管線（LSC→AWB→CCM→gamma）。用這個 register 可以驗證「哪一段由感測器做」。</div>
+
+<h2>7.18 多層疑難排解決策樹</h2>
+<p><strong>決策樹 A：ISP 開關實驗失敗</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 A</div><pre>i2cset 0x501F=0x01 後影像異常？
+├─ 影像不變 → ISP 未生效
+│  ├─ 檢查 0x501F 回讀值 → 是否寫入成功
+│  └─ 檢查 sensor format → ISP 只在特定格式下運作
+├─ 影像變差 → ISP 設定錯誤
+│  ├─ 檢查 LSC/AWB/CCM 開關
+│  └─ 嘗試只開 ISP 但關閉其他模組
+└─ 影像變好 → 正常！記錄差異
+   └─ 截圖對比：ISP on vs off</pre></div>
+
+<p><strong>決策樹 B：感測器內 ISP vs 平台 ISP 混亂</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 B</div><pre>OV5640 的 ISP 幹什麼？
+├─ 內建：AEC/AGC/AWB/LSC（0x501F 控制）
+├─ 平台：RK3588 的 ISP（若有）
+└─ 後處理：你的 Python 腳本（任意）
+   └─ 關鍵：先在 RAW 上驗證（關閉 0x501F）</pre></div>
+
+<h2>7.19 量測驗證完整 SOP</h2>
+<table>
+<tr><th>步驟</th><th>指令</th><th>預期輸出</th><th>判讀標準</th></tr>
+<tr><td>1. 關閉 ISP</td><td><code>i2cset -y 3 0x3c 0x501f 0x00</code></td><td>RAW 輸出</td><td>感測器直出 RAW</td></tr>
+<tr><td>2. 取 RAW</td><td><code>v4l2-ctl --stream-mmap=1 --stream-count=1</code></td><td>RAW 檔</td><td>Bayer 格式正確</td></tr>
+<tr><td>3. 開啟 ISP</td><td><code>i2cset -y 3 0x3c 0x501f 0x01</code></td><td>ISP 管線</td><td>影像經過處理</td></tr>
+<tr><td>4. 取 ISP 輸出</td><td><code>v4l2-ctl --stream-mmap=1 --stream-count=1</code></td><td>處理後影像</td><td>對比 RAW 差異</td></tr>
+<tr><td>5. 開關 LSC</td><td><code>i2cset ... 0x5800 0x00</code></td><td>LSC 關閉</td><td>角落暗角出現</td></tr>
+<tr><td>6. 驗證 AEC</td><td><code>i2cset ... 0x3503 0x08; i2cset ... 0x3500 0x00</code></td><td>手動曝光</td><td>可控制亮度</td></tr>
+</table>
+
+<h2>7.20 四平台終極對照</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th><th>推薦</th></tr>
+<tr><td>ISP 硬體</td><td>RK3588 有 / H618 無</td><td>硬體 ISP</td><td>NVIDIA ISP</td><td>Blackwell ISP</td><td>畫質→NVIDIA</td></tr>
+<tr><td>ISP 開關</td><td>0x501F（OV5640）</td><td>libcamera tuning</td><td>封閉</td><td>封閉</td><td>學習→0x501F</td></tr>
+<tr><td>調校彈性</td><td>最高（register 層）</td><td>高（IPA 開源）</td><td>低（封閉）</td><td>低（封閉）</td><td>學習→Orange Pi</td></tr>
+<tr><td>校正路線</td><td>感測器內建</td><td>libcamera 3A</td><td>NVIDIA 3A</td><td>NVIDIA 3A</td><td>底層→感測器</td></tr>
+<tr><td>LSC/AWB/CCM</td><td>OV5640 內建</td><td>ISP 內建</td><td>ISP 內建</td><td>ISP 內建</td><td>學習→OV5640</td></tr>
+</table>
+
+<h2>7.21 完整 Bring-up 專案 Checklist</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 產出「ISP 分工表」（哪一段由感測器/平台/後處理做）
+- [ ] 用 0x501F 開關實驗證明「哪一段由感測器做」
+- [ ] 用 0x5800 開關 LSC 並截圖對比
+- [ ] 驗證 AEC 手動控制（0x3503=0x08）
+- [ ] 關閉 ISP 取 RAW，開啟 ISP 取處理後影像
+- [ ] 產出「三層校正能力表」（sensor/platform/post）
+- [ ] 確認 OV5640 內建 AEC/AGC/AWB/LSC 的 register 群
+- [ ] 比較 RK3588 與 H618 的 ISP 能力差異
+- [ ] 遵守「單變數實驗法」並保留每次實驗備份
+- [ ] 產出「ISP 管線實驗報告」</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>Orange Pi 的 ISP 現實。</li><li>OV5640 內建 AEC/AGC/AWB register 群。</li><li>RK3588 vs H6xx 差異。</li><li>感測器內 ISP 的優點與限制。</li><li>經典 ISP 管線各階段與 register 對應。</li><li>用 ISP 開關實驗驗證管線在哪一段。</li><li>感測器/平台/後處理三層的調校空間對照。</li></ul>

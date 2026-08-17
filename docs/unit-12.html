@@ -239,6 +239,69 @@ EOF</pre></div>
 - [ ] 我已平滑增益圖避免放大雜訊。
 - [ ] 我知道 H618 沒有硬體 LSC，後處理是唯一路線。</pre></div>
 
+  <h2>12.20 Register 位元級完整工作流</h2>
+<p>鏡頭陰影校正（LSC）的「讀→改→寫→驗證」是影像均勻性的基礎：</p>
+<table class="reg-table">
+<tr><th>步驟</th><th>暫存器/位址</th><th>位元欄位</th><th>操作</th><th>預期值</th></tr>
+<tr><td>1. 開啟 LSC</td><td>0x5800</td><td>[0] LSC enable</td><td><code>i2cset -y 3 0x3c 0x5800 0x01</code></td><td>LSC 開啟</td></tr>
+<tr><td>2. 設定中心增益</td><td>0x5801</td><td>[7:0] center gain</td><td><code>i2cset ... 0x5801 0x40</code></td><td>1.0×（64=1.0×）</td></tr>
+<tr><td>3. 設定角落增益</td><td>0x5802~0x5806</td><td>[7:0] corner gains</td><td><code>i2cset ... 0x5802 0x80</code></td><td>2.0×（補償暗角）</td></tr>
+<tr><td>4. 回讀驗證</td><td>0x5800~0x5806</td><td>[7:0]</td><td><code>i2cget ... 0x5800</code></td><td>所有值正確</td></tr>
+<tr><td>5. 關閉 LSC</td><td>0x5800</td><td>[0]</td><td><code>i2cset ... 0x5800 0x00</code></td><td>LSC off（對比用）</td></tr>
+<tr><td>6. 取幀對比</td><td>v4l2-ctl</td><td>—</td><td>拍兩幀（LSC on/off）</td><td>角落亮度改善</td></tr>
+</table>
+<div class="callout info"><strong>位元級關鍵：</strong> OV5640 的 LSC 增益是整數格式：64 = 1.0×。角落需要更高的增益（如 128 = 2.0×）來補償 cos⁴ law 的亮度衰減。必須在 RAW 上做，不能在 YUV 上做。</div>
+
+<h2>12.21 多層疑難排解決策樹</h2>
+<p><strong>決策樹 A：LSC 效果不明顯</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 A</div><pre>LSC on/off 差異不大？
+├─ 鏡頭品質好（暗角小）
+│  └─ 正常！高品質鏡頭不需要 LSC
+├─ LSC 增益設定太小
+│  └─ 增加角落增益（0x5802~0x5806）
+└─ LSC 未生效
+   └─ 檢查 0x5800[0] 是否為 1</pre></div>
+
+<p><strong>決策樹 B：LSC 後角落雜訊放大</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 B</div><pre>LSC 後角落雜訊增加？
+├─ 增益太高 → 減少角落增益
+├─ 雜訊基底高 → 先降噪再 LSC
+└─ 正常（物理限制）
+   └─ 記錄「LSC 增益 vs 雜訊」的取捨</pre></div>
+
+<h2>12.22 量測驗證完整 SOP</h2>
+<table>
+<tr><th>步驟</th><th>指令</th><th>預期輸出</th><th>判讀標準</th></tr>
+<tr><td>1. 關閉 LSC</td><td><code>i2cset ... 0x5800 0x00</code></td><td>RAW 無校正</td><td>角落偏暗</td></tr>
+<tr><td>2. 取 RAW</td><td><code>v4l2-ctl --stream-mmap=1 --stream-count=1</code></td><td>RAW 檔</td><td>有暗角</td></tr>
+<tr><td>3. 開啟 LSC</td><td><code>i2cset ... 0x5800 0x01</code></td><td>LSC on</td><td>角落亮度改善</td></tr>
+<tr><td>4. 取校正後 RAW</td><td><code>v4l2-ctl --stream-mmap=1 --stream-count=1</code></td><td>校正後 RAW</td><td>均勻性改善</td></tr>
+<tr><td>5. 量測 corner/center</td><td>Python script</td><td>亮度比值</td><td>校正後比值接近1</td></tr>
+<tr><td>6. 分通道驗證</td><td>R/G/B 分別量測</td><td>各通道比值</td><td>避免色差殘留</td></tr>
+</table>
+
+<h2>12.23 四平台終極對照</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th><th>推薦</th></tr>
+<tr><td>LSC 硬體</td><td>OV5640 內建（有限）</td><td>ISP 內建</td><td>ISP 內建</td><td>ISP 內建</td><td>學習→OV5640</td></tr>
+<tr><td>後處理 LSC</td><td>自寫 Python</td><td>libcamera 後期</td><td>可選</td><td>可選</td><td>底層→Python</td></tr>
+<tr><td>即時性</td><td>⚠️ 後處理 CPU</td><td>✅ 硬體</td><td>✅ 硬體</td><td>✅ 硬體</td><td>效能→硬體</td></tr>
+<tr><td>分通道</td><td>後處理可做</td><td>ISP 內建</td><td>ISP 內建</td><td>ISP 內建</td><td>學習→分通道</td></tr>
+<tr><td>校正工具</td><td>自寫 Python</td><td>libcamera tuning</td><td>NVIDIA 工具</td><td>NVIDIA 工具</td><td>學習→Python</td></tr>
+</table>
+
+<h2>12.24 完整 Bring-up 專案 Checklist</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 完成「多鏡頭 LSC 資料庫」專案並產出增益圖
+- [ ] 量測校正前後的 corner/center 比值
+- [ ] 分通道做 LSC 並避免色差殘留
+- [ ] 驗證「LSC 必須在 RAW 上做」（YUV 上做會失敗）
+- [ ] 平滑增益圖避免放大雜訊
+- [ ] 確認 H618 沒有硬體 LSC（後處理是唯一路線）
+- [ ] 產出「LSC 校正報告」（含增益圖/corner-center 比值）
+- [ ] 測試不同鏡頭的 LSC 差異
+- [ ] 驗證 LSC 隨組合（感測器+鏡頭）需重新校正
+- [ ] 產出「lens shading database」</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>lens shading 成因。</li><li>Orange Pi 三條 LSC 路線。</li><li>後處理 LSC 實作。</li><li>LSC 需隨組合重新校正。</li><li>cos⁴ law 與分通道增益的必要性。</li><li>完整後處理 LSC 的 Worked Example。</li></ul>

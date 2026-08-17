@@ -188,6 +188,72 @@ EOF</pre></div>
 - [ ] 我已比較 RK3588 與 H618 的校正路線差異。
 - [ ] 我能說出「什麼需求該選什麼平台」的判準。</pre></div>
 
+  <h2>9.15 Register 位元級完整工作流</h2>
+<p>平台 ISP 差異的核心在「register 控制的深度」。以下是四平台的位元級比較：</p>
+<table class="reg-table">
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th></tr>
+<tr><td>ISP 開關</td><td>0x501F（OV5640）</td><td>libcamera tuning</td><td>封閉設定</td><td>封閉設定</td></tr>
+<tr><td>AWB 控制</td><td>0x5180~0x5190</td><td>ColourTemperature</td><td>NVIDIA AWB</td><td>NVIDIA AWB</td></tr>
+<tr><td>AEC 控制</td><td>0x3503~0x3502</td><td>ExposureTime</td><td>NVIDIA AE</td><td>NVIDIA AE</td></tr>
+<tr><td>LSC 控制</td><td>0x5800（OV5640）</td><td>tuning file</td><td>NVIDIA tuning</td><td>NVIDIA tuning</td></tr>
+<tr><td>CCM 控制</td><td>0x5800~0x5830</td><td>ColourCorrection</td><td>NVIDIA CCM</td><td>NVIDIA CCM</td></tr>
+<tr><td>register 可見度</td><td>完全可見</td><td>部分可見</td><td>封閉</td><td>封閉</td></tr>
+</table>
+<div class="callout info"><strong>位元級關鍵：</strong> Orange Pi 的 ISP 控制是「最低抽象層」——你能直接讀寫 OV5640 的每一個 register。RPi5 透過 libcamera 抽象（但開源可改）；NVIDIA 完全封閉。學習 Orange Pi 的 register 操作，等於拿到其他平台底層的「共同語言」。</div>
+
+<h2>9.16 多層疑難排解決策樹</h2>
+<p><strong>決策樹 A：如何判斷板卡有無平台 ISP</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 A</div><pre>查 dmesg 看 ISP 字樣
+├─ 有 "rkisp" → RK3588 有硬體 ISP
+│  └─ 可用 media-ctl 控制 ISP entity
+├─ 無 ISP 字樣 → 純感測器端
+│  └─ H618：完全依賴 OV5640 內建 ISP
+└─ 有 "libcamera" → RPi5 用 libcamera 抽象
+   └─ 查 libcamera tuning file</pre></div>
+
+<p><strong>決策樹 B：選型決策</strong></p>
+<div class="demo-block"><div class="demo-label">決策樹 B</div><pre>你的目標是什麼？
+├─ 學習底層 → Orange Pi（H618）
+│  └─ register 開放、除錯完全
+├─ 開源產品 → RPi5
+│  └─ libcamera tuning 可改
+├─ 量產畫質 → NVIDIA（Orin/Thor）
+│  └─ 封閉但強
+└─ 多機/雲端 → Thor
+   └─ Blackwell ISP + Holoscan</pre></div>
+
+<h2>9.17 量測驗證完整 SOP</h2>
+<table>
+<tr><th>步驟</th><th>指令</th><th>預期輸出</th><th>判讀標準</th></tr>
+<tr><td>1. 確認 SoC</td><td><code>cat /proc/device-tree/compatible</code></td><td>rk3588 / h618</td><td>清楚型號</td></tr>
+<tr><td>2. 查 ISP</td><td><code>dmesg | grep -i "isp\|rkisp"</code></td><td>有/無 ISP</td><td>判斷硬體 ISP</td></tr>
+<tr><td>3. 查 controls</td><td><code>v4l2-ctl -l</code></td><td>列出 V4L2_CID_*</td><td>依平台不同</td></tr>
+<tr><td>4. 測 register 深度</td><td><code>i2cget -y 3 0x3c 0x501f</code></td><td>OV5640 ISP 開關</td><td>Orange Pi 可直控</td></tr>
+<tr><td>5. 比較四平台</td><td>產出表格</td><td>三層能力表</td><td>有數據的報告</td></tr>
+</table>
+
+<h2>9.18 四平台終極對照</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th><th>推薦</th></tr>
+<tr><td>代表 SoC</td><td>RK3588 / H618</td><td>BCM2712</td><td>Orin Nano</td><td>T5000</td><td>依需求</td></tr>
+<tr><td>ISP 硬體</td><td>RK 有 / H618 無</td><td>硬體 ISP</td><td>NVIDIA ISP</td><td>Blackwell</td><td>畫質→NVIDIA</td></tr>
+<tr><td>調校工具</td><td>register 直控</td><td>libcamera tuning</td><td>NVIDIA 工具</td><td>Holoscan</td><td>底層→Orange Pi</td></tr>
+<tr><td>開放性</td><td>最高</td><td>開源</td><td>封閉</td><td>封閉</td><td>學習→Orange Pi</td></tr>
+<tr><td>適合</td><td>學習/原型</td><td>開源產品</td><td>量產畫質</td><td>多機/雲端</td><td>依目標選</td></tr>
+</table>
+
+<h2>9.19 完整 Bring-up 專案 Checklist</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 完成「選型評估」報告（含數據）
+- [ ] 填出本平台的三層校正能力表
+- [ ] 確認「感測器端 3A vs 平台 3A」的精度差異
+- [ ] 說明 ISP 能力由「硬體 + 驅動 + 工具鏈」三層決定
+- [ ] 比較 RK3588 與 H618 的校正路線差異
+- [ ] 用「底層→開源→封閉」三分法選平台
+- [ ] 產出「platform architecture」文件
+- [ ] 確認 OV5640 內建 ISP 的 register 群
+- [ ] 驗證各平台的 register 可見度
+- [ ] 說明「什麼需求該選什麼平台」的判準</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>四平台校正主力概覽。</li><li>Orange Pi 靠感測器內建。</li><li>限制反而強化感測器理解。</li><li>何時升級到有平台 ISP 的板卡。</li><li>ISP 能力由「硬體+驅動+工具鏈」三層決定。</li><li>用 Worked Example 判斷板卡校正路線。</li></ul>
