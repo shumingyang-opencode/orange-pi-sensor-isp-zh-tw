@@ -38,7 +38,7 @@
 <tr><td>HDR</td><td>✅</td><td><strong>⚠️ 依驅動</strong></td><td>✅</td><td>✅✅</td></tr>
 <tr><td>工具鏈</td><td>開源</td><td><strong>V4L2 陽春開放</strong></td><td>封閉強</td><td>新</td></tr>
 </table>
-<div class="callout"><strong>Orange Pi 定位：</strong>調校功能最弱，但「最貼近 Linux 底層」——適合想徹底理解感測器 register 的工程師；追求畫質時升級 RPi5 / NVIDIA。</div><h2>15.4 對同一顆 OV 感測器的操作差異</h2>
+<div class="callout"><strong>Orange Pi 定位：</strong>調校功能最弱，但「最貼近 Linux 底層」——適合想徹底理解感測器 register 的工程師；追求畫質時升級 RPi5 / NVIDIA。</div><h2>15.2 對同一顆 OV 感測器的操作差異</h2>
 <table>
 <tr><th>面向</th><th>RPi5</th><th>Orange Pi</th><th>Orin Nano</th><th>Thor</th></tr>
 <tr><td>感測器控制</td><td>libcamera</td><td>V4L2 subdev</td><td>tegracam/Argus</td><td>tegracam/Holoscan</td></tr>
@@ -47,12 +47,13 @@
 <tr><td>RAW</td><td>rpicam --raw</td><td>v4l2-ctl</td><td>argus raw</td><td>argus/Holoscan</td></tr>
 </table>
 <div class="callout"><strong>核心領悟：</strong>四平台做的是同一件事，只是介面不同——本課建立的原理與流程可 100% 平移。</div>
-<h2>15.5 感測器 register 層的共通性</h2>
+<h2>15.3 感測器 register 層的共通性</h2>
 <p>無論平台，OV 感測器 register（0x300A ID、0x3500 曝光、0x350A 增益）<strong>相同</strong>——平台差異只在「誰幫你寫」。</p>
 <div class="demo-block"><div class="demo-label">四平台讀同一個 register（0x300A）</div><pre>RPi5:      i2ctransfer -y 22 w2@0x36 0x30 0x0a r1
 Orange Pi: i2ctransfer -y 3  w2@0x3c 0x30 0x0a r1
 Orin/Thor: i2ctransfer -y 0  w2@0x36 0x30 0x0a r1</pre></div>
 <h2>15.4 深入：對同一顆 OV5640 的四平台操作</h2>
+<p>下表再把「四平台操作」從介面層收斂到 register 層，方便直接對照：</p>
 <table>
 <tr><th>面向</th><th>RPi5</th><th>Orange Pi</th><th>Orin Nano</th><th>Thor</th></tr>
 <tr><td>感測器控制</td><td>libcamera</td><td>V4L2 subdev</td><td>tegracam/Argus</td><td>tegracam/Holoscan</td></tr>
@@ -62,7 +63,51 @@ Orin/Thor: i2ctransfer -y 0  w2@0x36 0x30 0x0a r1</pre></div>
 </table>
 <div class="callout"><strong>核心領悟：</strong>register 相同、概念相同、流程相同；變的只有介面。</div>
 
-<h2>15.5 練習</h2>
+<h2>15.5 深入原理：為什麼 register 相同而介面不同</h2>
+<p>四平台面對「同一顆感測器」時，硬體 register 完全相同——差異在<strong>抽象層</strong>。這源自各自的「控制模型」：</p>
+<table>
+<tr><th>平台</th><th>控制模型</th><th>抽象層</th><th>誰寫 register</th></tr>
+<tr><td>RPi5</td><td>libcamera + 平台 ISP</td><td>高（3A 全自動）</td><td>libcamera IPA</td></tr>
+<tr><td>Orange Pi</td><td>V4L2 subdev</td><td>低（直接 controls）</td><td>使用者/驅動</td></tr>
+<tr><td>Orin Nano</td><td>tegracam + Argus</td><td>高（封閉）</td><td>NVIDIA 驅動</td></tr>
+<tr><td>Thor T5000</td><td>Holoscan + Argus</td><td>最高（新）</td><td>NVIDIA 驅動</td></tr>
+</table>
+<p><strong>調校可攜性的關鍵：</strong>你在 Orange Pi 學到的「曝光三要素順序」「灰卡 AWB」「RAW 驗證」是感測器物理，與介面無關——搬到任何平台都成立。介面差異只是「怎麼把意圖翻譯成 register」。</p>
+<div class="callout info"><strong>選擇建議：</strong>想徹底懂感測器 → Orange Pi（最低抽象）；要快速量產畫質 → RPi5/NVIDIA；要在雲端管理多機 → Thor/Holoscan。</div>
+
+<h2>15.6 完整 Worked Example：同一任務的四平台對照</h2>
+<p>任務：「把曝光鎖在固定值、關自動白平衡、取一幀 RAW」。</p>
+<div class="demo-block"><div class="demo-label">RPi5（libcamera）</div><pre>rpicam-still -o shot.jpg --immediate --raw --shutter 2000 \
+  --awbgains 1.4,1.1 --gain 1.0</pre></div>
+<div class="demo-block"><div class="demo-label">Orange Pi（V4L2）</div><pre>v4l2-ctl -d /dev/v4l-subdev0 -c auto_exposure=0 -c exposure=2000 \
+  -c auto_n_white_balance=0 -c red_balance=140 -c blue_balance=110
+v4l2-ctl -d /dev/video0 --set-fmt-video=pixelformat=SRGGB10 \
+  --stream-mmap=3 --stream-count=1 --stream-to=shot.raw</pre></div>
+<div class="demo-block"><div class="demo-label">Orin Nano（Argus）</div><pre># argus_camera / libargus API 設定 SensorMode exp_time + AWB off
+gst-launch-1.0 nvarguscamerasrc sensor-id=0 ! 'video/x-raw(memory:NVMM)' ! fakesink</pre></div>
+<div class="demo-block"><div class="demo-label">Thor（Holoscan）</div><pre># Holoscan SDK 的 GXF/operator 配置 sensor mode 與 AWB 設定</pre></div>
+<div class="callout"><strong>完成標準：</strong>你能對同一任務在四平台「各寫出一行等效設定」，並說出每個參數對應到感測器 register（0x3500 曝光 / 0x5180 AWB）的關係。</div>
+
+<h2>15.7 疑難排解決策樹：跨平台移植踩雷</h2>
+<table>
+<tr><th>現象</th><th>方向</th></tr>
+<tr><td>曝光值單位不同</td><td>各平台單位（µs/line/倍數）不同 → 對照 datasheet 轉換</td></tr>
+<tr><td>gain 定義不同</td><td>有的 1.0 基數、有的 0dB 基準 → 查 control 說明</td></tr>
+<tr><td>AWB 沒關就手動設</td><td>auto 優先 → 先關 auto 再設手動</td></tr>
+<tr><td>RAW 格式名稱不同</td><td>fourcc/名稱各平台異 → 統一用位元深 + order 描述</td></tr>
+<tr><td>節點編號不同</td><td>sensor-id / /dev/videoN 對應不同 → 先列 devices</td></tr>
+</table>
+<div class="callout warn"><strong>常見錯誤與陷阱：</strong>① 直接照搬另一個平台的數值（單位沒換）；② 以為「gains 1.4,1.1」在 Orange Pi 也是同一意義——OV 用無號整數（如 128=1.0×）；③ 忽略平台 3A 引擎仍在跑——必須全部關閉才有可比性。</div>
+
+<h2>15.8 練習</h2>
+<ol>
+<li>完成「鎖曝光、關 AWB、取 RAW」的四平台等效指令表。</li>
+<li>把 Orange Pi 的 exposure=2000 換算成 µs（查 OV5640 1-line 週期），再對照 RPi5 的 shutter 單位。</li>
+<li>說明「感測器物理可攜、介面不可攜」並舉兩個例子。</li>
+<li>若你有第二平台，實際跑一次相同任務比較結果。</li>
+</ol>
+
+<h2>15.9 回顧練習</h2>
 <ol>
 <li>列出「讀 sensor ID」在四平台的指令。</li>
 <li>說明 register 相同而介面不同的原因。</li>

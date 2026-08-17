@@ -50,7 +50,55 @@ v4l2-ctl -d /dev/v4l-subdev0 -c analogue_gain=200</pre></div>
 <div class="demo-block"><div class="demo-label">控制曝光</div><pre>v4l2-ctl -d /dev/v4l-subdev0 -c exposure=1000</pre></div>
 <div class="callout"><strong>順序鐵則：</strong>先快門 → 類比增益 → 數位增益。用增益補曝光犧牲畫質。</div>
 
-<h2>10.7 練習</h2>
+<h2>10.8 深入原理：曝光 register 的位元展開與 AEC 演算法</h2>
+<p>OV5640 的曝光時間由 <code>0x3500–0x3503</code> 四個 byte 組合，且受 <code>0x3503</code> 的 bit 開關控制：</p>
+<table class="reg-table">
+<tr><th>Register</th><th>欄位</th><th>說明</th></tr>
+<tr><td class="reg">0x3500</td><td>exposure[19:16]</td><td>曝光最高位元</td></tr>
+<tr><td class="reg">0x3501</td><td>exposure[15:8]</td><td>中位元組</td></tr>
+<tr><td class="reg">0x3502</td><td>exposure[7:0]</td><td>低位元組</td></tr>
+<tr><td class="reg">0x3503[1]</td><td>manual exposure en</td><td>1 = 手動（AEC 關）</td></tr>
+<tr><td class="reg">0x3503[2]</td><td>manual gain en</td><td>1 = 手動（AGC 關）</td></tr>
+</table>
+<p>曝光值單位是「感測器 row 週期」（1 line）。<strong>AEC 收斂策略</strong>：先加曝光到接近幀上限（避免運動模糊），再升增益，最後才用數位增益——這就是「先快門 → 類比 → 數位」鐵則的由來。</p>
+<div class="callout info"><strong>為什麼曝光上限有 ceiling：</strong>曝光太長會超過一幀的 row 週期 → 畫面變黑/幀率下降（frame rate 與 exposure 共享時間預算，單元 11 會算）。</div>
+
+<h2>10.9 完整 Worked Example：從讀取到設定的完整流程</h2>
+<div class="demo-block"><div class="demo-label">步驟 1｜讀目前曝光與增益</div><pre>for r in 0x3500 0x3501 0x3502 0x3503 0x350a 0x350b; do
+  h=${r:2:2}; l=${r:4:2}
+  echo -n "$r: "; sudo i2ctransfer -y 3 w2@0x3c 0x$h 0x$l r1
+done</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜用 V4L2 關 AEC/AGC</div><pre>v4l2-ctl -d /dev/v4l-subdev0 -c auto_exposure=0
+v4l2-ctl -d /dev/v4l-subdev0 -c auto_gain=0</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜設定曝光並驗證</div><pre>v4l2-ctl -d /dev/v4l-subdev0 -c exposure=2000
+v4l2-ctl -d /dev/v4l-subdev0 -C exposure    <span class="hl-c"># 讀回，應等於 2000</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 4｜對比亮度變化</div><pre><span class="hl-c"># 依序取 exposure=500/2000/6000 三幀，統計平均亮度</span>
+for e in 500 2000 6000; do
+  v4l2-ctl -d /dev/v4l-subdev0 -c exposure=$e
+  v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=1 --stream-to=e$e.yuv
+done</pre></div>
+<div class="callout"><strong>完成標準：</strong>你能展示「曝光值↑ → 平均亮度↑」的單調關係，且讀回值與設定一致。若無單調關係，檢查 AEC 是否真的關了。</div>
+
+<h2>10.10 疑難排解決策樹：曝光問題</h2>
+<table>
+<tr><th>現象</th><th>方向</th></tr>
+<tr><td>太暗、調 exposure 無效</td><td>AEC 沒關 / 已到曝光上限 → 補光</td></tr>
+<tr><td>太亮、clipping</td><td>曝光/增益太高或場景反光 → 降曝光</td></tr>
+<tr><td>日光燈下橫條紋</td><td>banding：曝光非 50/60Hz 倍數 → 曝光調成 10ms/8.3ms 倍數</td></tr>
+<tr><td>設定後立刻跳回自動值</td><td>另一層 3A 在跑（平台/後處理）→ 關所有 auto</td></tr>
+<tr><td>亮暗閃爍</td><td>AEC 收斂慢/oscillation → 鎖定曝光改調增益</td></tr>
+</table>
+<div class="callout warn"><strong>常見錯誤與陷阱：</strong>① 曝光單位誤解（line 週期 vs µs）——先看 <code>--list-ctrls</code> 的說明；② 只調 exposure 不關 auto_exposure，設了等於沒設；③ banding 時猛拉增益——先對齊電源頻率倍數；④ 在低光硬拉曝光造成 motion blur——先想「要不要補光」。</div>
+
+<h2>10.11 練習</h2>
+<ol>
+<li>完成 Worked Example 四步，記錄每步輸出。</li>
+<li>在日光燈下找出「不 banding」的曝光值區間。</li>
+<li>用 SNR 觀念（單元 13）決定「這場景該用多少曝光/增益」。</li>
+<li>寫一支 script：<code>exposure_sweep.sh</code>，自動掃曝光並輸出亮度曲線。</li>
+</ol>
+
+<h2>10.12 回顧練習</h2>
 <ol>
 <li>讀目前曝光/增益值。</li>
 <li>手動設定並確認生效。</li>

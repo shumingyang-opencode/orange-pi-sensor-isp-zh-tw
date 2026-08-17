@@ -64,9 +64,68 @@ EOF</pre></div>
 
 
 
+  <h2>12.8 深入原理：cos⁴ law 與 shading 的量化模型</h2>
+<p>鏡頭邊緣變暗不是「故障」而是 <strong>光學定律</strong>。點光源經鏡頭成像，照度隨離軸角 θ 依 <strong>cos⁴θ</strong> 衰減：</p>
+<div class="pipe"><span class="step">中心照度 E₀</span><span class="arr">×</span><span class="step">cos⁴θ</span><span class="arr">=</span><span class="step">角落照度</span></div>
+<ul>
+<li>θ = 離軸角（不是視角）。60° 視角的相機，角落照度約剩中心 <code>cos⁴(30°) ≈ 0.56</code>——差將近一半。</li>
+<li><strong>色差 shading</strong>：紅光與藍光在鏡頭折射不同 → 角落不只變暗還偏色（常偏洋紅/青）。</li>
+<li>LSC 的任務就是「量出每一位置的增益並補償」——所以需要<strong>分通道</strong>的增益表，不只一個亮度增益。</li>
+</ul>
+<div class="callout info"><strong>為什麼要分通道：</strong>亮度 shading 補亮度，色差 shading 補色彩。若只用單一增益，角落會「變亮但仍偏色」——這是初學者最常漏的。</div>
+
+<h2>12.9 完整 Worked Example：完整後處理 LSC 流程</h2>
+<div class="demo-block"><div class="demo-label">步驟 1｜拍均勻亮場（diffuse 光源 + 灰/白卡）</div><pre><span class="hl-c"># 固定曝光避免過曝，關 AWB 讓四通道可比</span>
+v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=SRGGB10 \
+  --stream-mmap=3 --stream-count=1 --stream-to=flat.raw</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜分通道算增益圖</div><pre>python3 - <<'EOF'
+import numpy as np
+raw = np.fromfile('flat.raw', dtype=np.uint16).reshape(720,1280)
+chans = {'R':raw[0::2,0::2], 'Gr':raw[0::2,1::2],
+         'Gb':raw[1::2,0::2], 'B':raw[1::2,1::2]}
+for name, c in chans.items():
+    center = c[100:260, 200:440].mean()
+    gain = center / (c + 1e-6)          <span class="hl-c"># 逐像素增益</span>
+    np.save(f'gain_{name}.npy', gain)
+    print(name, 'corner gain ~', np.percentile(gain, 5))
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜套用到實拍幀</div><pre>python3 - <<'EOF'
+import numpy as np, cv2
+raw = np.fromfile('shot.raw', dtype=np.uint16).reshape(720,1280)
+out = raw.copy().astype(float)
+for name, sl in {'R':(slice(0,None,2),slice(0,None,2)),
+                 'Gr':(slice(0,None,2),slice(1,None,2)),
+                 'Gb':(slice(1,None,2),slice(0,None,2)),
+                 'B':(slice(1,None,2),slice(1,None,2))}.items():
+    g = np.load(f'gain_{name}.npy')
+    out[sl] = out[sl] * g
+out = np.clip(out, 0, 1023).astype(np.uint16)
+out.tofile('shot_lsc.raw')
+EOF</pre></div>
+<div class="callout warn"><strong>紀律：</strong>亮場拍攝必須「不飽和且不靠近黑位」——用曝光把峰值壓在 ~80% 滿量程，再對齊中央。增益圖要做平滑（blur）否則會放大雜訊。</div>
+
+<h2>12.10 疑難排解決策樹：LSC 效果不好</h2>
+<table>
+<tr><th>現象</th><th>方向</th></tr>
+<tr><td>角落仍暗</td><td>增益圖範圍不足或亮場不均 → 換更 diffuse 光源</td></tr>
+<tr><td>角落偏色</td><td>只用單通道增益 → 分 R/Gr/Gb/B 各自算</td></tr>
+<tr><td>套用後雜訊暴增</td><td>增益圖沒平滑 → blur 增益圖</td></tr>
+<tr><td>中心出現亮斑</td><td>亮場過曝 saturate → 降曝光重拍</td></tr>
+<tr><td>換鏡頭後失效</td><td>LSC 是鏡頭+感測器組合特有 → 重新校正</td></tr>
+</table>
+<div class="callout warn"><strong>常見錯誤與陷阱：</strong>① 用不均勻光源當「亮場」——整張都是假的 shading；② 把 YUV 當 RAW 算增益——必須在 RAW 做；③ 忘了平滑增益圖；④ 想「一組 LSC 走天下」——不同解析度/binning/鏡頭都要重做。</div>
+
+<h2>12.11 練習</h2>
+<ol>
+<li>完成完整後處理 LSC 流程，比較「校正前/後」角落亮度。</li>
+<li>分別用「單增益」與「分通道增益」跑一次，記錄偏色差異。</li>
+<li>說明為什麼必須在 RAW 上做 LSC，而不是 YUV。</li>
+<li>在你板卡上記錄「不同解析度的 LSC 是否要分開」。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
-    <ul><li>lens shading 成因。</li><li>Orange Pi 三條 LSC 路線。</li><li>後處理 LSC 實作。</li><li>LSC 需隨組合重新校正。</li></ul>
+    <ul><li>lens shading 成因。</li><li>Orange Pi 三條 LSC 路線。</li><li>後處理 LSC 實作。</li><li>LSC 需隨組合重新校正。</li><li>cos⁴ law 與分通道增益的必要性。</li><li>完整後處理 LSC 的 Worked Example。</li></ul>
   </div>
 
   <h2>延伸閱讀</h2>

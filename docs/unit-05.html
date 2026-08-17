@@ -59,7 +59,47 @@ v4l2-ctl -d /dev/video0 --stream-mmap=1 --stream-count=1 --stream-to=f.yuv
 v4l2-ctl -d /dev/video0 --list-formats-ext</pre></div>
 <div class="callout"><strong>通過標準：</strong>取到一幀 = 感測器→CSI→video 鏈路通。接著才談調校。</div>
 
-<h2>5.8 練習</h2>
+<h2>5.9 深入原理：streaming 的 buffer 流程</h2>
+<p>「取一幀」背後是完整的 <strong>V4L2 buffer 迴圈</strong>。理解它，之後要處理幀率、頻寬、多相機才不會卡住。</p>
+<div class="pipe"><span class="step">VIDIOC_REQBUFS</span><span class="arr">→</span><span class="step">MMAP 對映</span><span class="arr">→</span><span class="step">QBUF（排隊）</span><span class="arr">→</span><span class="step">STREAMON</span><span class="arr">→</span><span class="step">DQBUFF 拿幀</span><span class="arr">→</span><span class="step">QBUF 放回</span></div>
+<ul>
+<li><code>--stream-mmap=3</code> 代表配置 3 個 mmap buffer；buffer 由 kernel 填、使用者取。</li>
+<li><code>--stream-count=1</code> 代表只取一幀就停（並自動 STREAMOFF）。</li>
+<li>對齊單位：影片寬度常需 <code>bytesperline</code> 對齊（如 16/64 byte 倍數）——原始 buffer 尺寸與寬×高不一定相同。</li>
+</ul>
+<div class="callout info"><strong>為什麼用 mmap 而不用 read：</strong>mmap 零拷貝、可多 buffer 並行，適合高幀率。正式產品（GStreamer/FFmpeg）都用這個模型。</div>
+
+<h2>5.10 完整 Worked Example：穩定的取流 SOP</h2>
+<div class="demo-block"><div class="demo-label">步驟 1｜重置並建 link</div><pre>media-ctl -d /dev/media0 -r
+media-ctl -d /dev/media0 -l "'ov5640 3-003c':0->'csi2':0[1]"
+media-ctl -d /dev/media0 -V "'ov5640 3-003c':0[fmt:UYVY8_2X8/1280x720]"
+media-ctl -d /dev/media0 -V "'csi2':0[fmt:UYVY8_2X8/1280x720]"</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜設定 video 格式</div><pre>v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=YUYV</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜取一幀並檢查大小</div><pre>v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=1 --stream-to=frame.yuv
+ls -l frame.yuv   <span class="hl-c"># 1280*720*2 = 1,843,200 bytes</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 4｜即時預覽</div><pre>gst-launch-1.0 v4l2src device=/dev/video0 ! videoconvert ! autovideosink</pre></div>
+<div class="callout warn"><strong>紀律：</strong>每次換場景/板卡，先從「重設管線」開始——避免上一次殘留的 link/格式污染本次結果。管線路徑與格式字串必須以 <code>media-ctl -p</code> 輸出為準，別照抄本站範例。</div>
+
+<h2>5.11 疑難排解決策樹：取不到幀</h2>
+<table>
+<tr><th>現象</th><th>方向</th></tr>
+<tr><td><code>v4l2-ctl</code> 回 EINVAL/EBUSY</td><td>格式不支援 → 用 --list-formats-ext 查</td></tr>
+<tr><td>格式 OK 但一直 timeout</td><td>管線 link 沒建 / subdev 沒 streaming → media-ctl -p 檢查</td></tr>
+<tr><td>取到幀但全黑</td><td>曝光 0 / 沒光 / 感測器沒輸出 → 單元 6/10</td></tr>
+<tr><td>取到幀但綠/紫</td><td>YUYV/Bayer 設定錯 → 統一 fourcc</td></tr>
+<tr><td>GStreamer 白/黑畫面</td><td>caps 沒對齊 → 加 <code>caps</code> 明確指定格式</td></tr>
+</table>
+<div class="callout warn"><strong>常見錯誤與陷阱：</strong>① <code>pixelformat</code> 大小寫/順序錯（<code>YUYV</code> 不是 <code>YUVY</code>）；② 忘了先建 link 就取流——media graph 未連通必然沒資料；③ 用 <code>--stream-to=-</code> 寫 stdout 卻忘了重導向；④ GStreamer 的 <code>autovideosink</code> 在無顯示的 SSH 環境會失敗——改用 <code>fakesink</code> 驗證。</div>
+
+<h2>5.12 練習</h2>
+<ol>
+<li>重現 SOP，記錄每步輸出與 <code>frame.yuv</code> 大小。</li>
+<li>用 <code>--list-formats-ext</code> 列出全部 fourcc × 解析度組合。</li>
+<li>故意不建 link 取流，記錄錯誤訊息並寫下判斷。</li>
+<li>用 GStreamer <code>fakesink</code> 跑 5 秒並讀 fps 統計。</li>
+</ol>
+
+<h2>5.13 回顧練習</h2>
 <ol>
 <li>跑完整取流流程，確認格式。</li>
 <li>記錄支援的 fourcc 清單。</li>

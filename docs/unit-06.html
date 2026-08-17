@@ -74,7 +74,54 @@ done</pre></div>
 <div class="callout warn"><strong>最常見錯誤：</strong>RESET 未釋放就下 I2C → register「看似能寫但沒生效」。先確認 GPIO/時序，再碰 register。</div>
 <div class="demo-block"><div class="demo-label">dmesg 追線索</div><pre>dmesg | grep -i -E "ov5640|probe|csi|mipi|v4l2"</pre></div>
 
-<h2>6.8 練習：完整 Bring-up 演練</h2>
+<h2>6.9 深入原理：上電時序與 PLL/clock 的位元細節</h2>
+<p>Bring-up 最常卡在「register 能寫但影像不出」——通常不是 register 錯，而是 <strong>時序或 clock 沒到位</strong>。OV5640 的 clock 由 <code>XCLK</code> 輸入，內部經 PLL 產生感測器主時脈：</p>
+<table class="reg-table">
+<tr><th>Register</th><th>欄位</th><th>意義</th></tr>
+<tr><td class="reg">0x3035</td><td>PLL 分頻設定</td><td>MIPI 模式下的 clock 計算</td></tr>
+<tr><td class="reg">0x3036</td><td>PLL 倍頻</td><td>決定感測器內部時脈</td></tr>
+<tr><td class="reg">0x3106</td><td>clock 源開關</td><td>內部 clock 啟用</td></tr>
+<tr><td class="reg">0x3108</td><td>reset 控制</td><td>軟體 reset / 切模式</td></tr>
+</table>
+<p><strong>上電時序的位元級規則：</strong>① AVDD/DOVDD 先穩定 → ② XCLK 必須在 RESET 釋放「之前或同時」開始 → ③ RESET 釋放後要等 <code>t_PW_UP</code>（OV5640 datasheet 約數 ms）才能下 I2C → ④ 之後讀 ID。違反任一順序，感測器可能「不回應」或「回應但 register 寫不進去」。</p>
+<div class="callout info"><strong>驅動會幫你：</strong>mainline <code>ov5640.c</code> 的 <code>s_power</code>/<code>__power_on</code> 內已實作完整時序。手動 bring-up 只是為了理解「如果沒驅動，該怎麼自己來」。</div>
+
+<h2>6.10 完整 Worked Example：從零到有的一條龍 bring-up</h2>
+<div class="demo-block"><div class="demo-label">步驟 1｜確認電源與 clock 硬體</div><pre>cat /sys/kernel/debug/gpio | grep -i -E "reset|pwdn"   <span class="hl-c"># GPIO 狀態</span>
+cat /sys/kernel/debug/clk/clk_summary | grep -i xclk    <span class="hl-c"># clock 有無 enable</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜確認 probe 與 ID</div><pre>dmesg | grep -i ov5640
+sudo i2cdetect -y 3
+sudo i2cget -y 3 0x3c 0x300a   <span class="hl-c"># 0x56</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜讀 PLL 與上電狀態</div><pre>for r in 0x3035 0x3036 0x3106 0x3108; do
+  echo -n "$r: "; sudo i2ctransfer -y 3 w2@0x3c ${r:2:2} ${r:4:2} r1
+done</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 4｜建管線取幀</div><pre>media-ctl -d /dev/media0 -r
+media-ctl -d /dev/media0 -l "'ov5640 3-003c':0->'csi2':0[1]"
+v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=YUYV \
+  --stream-mmap=3 --stream-count=1 --stream-to=f.yuv</pre></div>
+<div class="callout"><strong>完成標準：</strong>從 GPIO/clock 一路驗證到「取到一幀」。每一關都過才代表 bring-up 完成，不是「register 能寫」就結束。</div>
+
+<h2>6.11 疑難排解決策樹：深入版</h2>
+<table>
+<tr><th>節點</th><th>失敗點</th><th>追查</th></tr>
+<tr><td>電源</td><td>AVDD/DVDD/DOVDD 電壓不在規格</td><td>電表量模組 pin、看電源樹 DT</td></tr>
+<tr><td>Clock</td><td>XCLK 無輸出或頻率錯</td><td>示波器量 XCLK；對照 DT 的 clock-frequency</td></tr>
+<tr><td>Reset</td><td>RESET 沒釋放</td><td>GPIO debug 檔、DT reset-gpios 高低電位</td></tr>
+<tr><td>I2C</td><td>ID 讀不到/讀錯</td><td>回單元 3 決策樹</td></tr>
+<tr><td>MIPI</td><td>dmesg 有 CSI no-data</td><td>檢查 lane count / 對齊、感測器 MIPI 輸出 register</td></tr>
+<tr><td>Media</td><td>管線沒連</td><td>media-ctl -p 對照</td></tr>
+</table>
+<div class="callout warn"><strong>常見錯誤與陷阱：</strong>① 用錯 XCLK 頻率（OV5640 需要 6–27 MHz，通常 24 MHz）——PLL 算錯會整批時序不對；② RESET 腳高/低電位搞反（active-low 是常態）；③ 誤以為「register 能讀」=「硬體全對」——讀寫只證明 I2C 通，不證明電源/clock/時序對；④ 換了板卡卻沿用舊 bus 編號。</div>
+
+<h2>6.12 練習</h2>
+<ol>
+<li>實作「GPIO→clock→ID→取幀」四步，輸出每一步的證據（指令輸出）。</li>
+<li>讀取 PLL register 群，對照你板卡的 XCLK 頻率寫出計算過程。</li>
+<li>模擬「RESET 未釋放」情境，記錄 register 讀寫的現象。</li>
+<li>把 dmesg 的 probe 流程整理成一份檢查表，貼進你的 bring-up SOP。</li>
+</ol>
+
+<h2>6.13 回顧練習：完整 Bring-up 演練</h2>
 <ol>
 <li>dmesg 確認 probe 成功、讀到 ID。</li>
 <li>media-ctl 確認管線。</li>

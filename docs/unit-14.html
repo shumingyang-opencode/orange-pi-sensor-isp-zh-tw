@@ -73,7 +73,71 @@
 <div class="demo-block"><div class="demo-label">tuning log 範本</div><pre>日期/場景/改動/原因/結果（量化）/回歸 ✓✗/附圖</pre></div>
 <div class="callout"><strong>紀律：</strong>一次只改一個參數、統一場景比較、完整記錄。</div>
 
-<h2>14.7 練習</h2>
+<h2>14.8 深入原理：動態範圍、位元深與 tone mapping</h2>
+<p>「動態範圍」是場景最亮與最暗可同時保留的範圍。RAW 的 <strong>DR 上限 ≈ 20·log₁₀(FullWell / ReadNoise)</strong>；輸出受限於位元深（10-bit → 60dB 的量化上限）。</p>
+<table>
+<tr><th>技術</th><th>原理</th><th>trade-off</th></tr>
+<tr><td>單幀 + tone mapping</td><td>壓縮亮部曲線</td><td>犧牲對比，運動無假影</td></tr>
+<tr><td>DOL HDR（多幀）</td><td>短/長曝光合併</td><td>動態範圍↑，但運動 ghost</td></tr>
+<tr><td>Sensor HDR</td><td>雙增益/雙曝光硬體</td><td>依感測器支援</td></tr>
+</table>
+<p><strong>判斷要不要 HDR</strong>：量場景「最亮/最暗 ROI 的 RAW 值」。若亮部已 1023、暗部仍貼近黑位，表示超過單幀 DR → 才考慮 HDR。若兩端都還在範圍內，HDR 只是徒增 ghost 風險。</p>
+<div class="callout info"><strong>tone mapping 與 gamma 的差別：</strong>gamma 是固定曲線（標準顯示轉換）；tone mapping 是場景自適應曲線（壓縮動態範圍）。後處理時兩者可疊加。</div>
+
+<h2>14.9 完整 Worked Example：調校工作流一輪</h2>
+<div class="demo-block"><div class="demo-label">步驟 1｜黑位校正（RAW 起點）</div><pre>python3 - <<'EOF'
+import numpy as np
+raw = np.fromfile('dark.raw', dtype=np.uint16).reshape(720,1280)
+ob = np.median(raw[600:700, 400:880])     <span class="hl-c"># 蓋鏡頭拍的暗幀</span>
+print('OB =', ob)
+np.save('ob.npy', ob)
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜LSC（來自單元 12 的增益圖）</div><pre>python3 - <<'EOF'
+import numpy as np
+raw = np.fromfile('shot.raw', dtype=np.uint16).reshape(720,1280)
+ob  = np.load('ob.npy')
+flat = (raw - ob).clip(0)                 <span class="hl-c"># 先減黑位</span>
+for name, sl in {'R':(slice(0,None,2),slice(0,None,2)),
+                 'Gr':(slice(0,None,2),slice(1,None,2)),
+                 'Gb':(slice(1,None,2),slice(0,None,2)),
+                 'B':(slice(1,None,2),slice(1,None,2))}.items():
+    flat[sl] = flat[sl] * np.load(f'gain_{name}.npy')
+flat.tofile('shot_lsc.raw')
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜曝光基準（單元 10）與 AWB（單元 11）</div><pre><span class="hl-c"># 用灰卡定曝光，讓灰卡 Y ≈ 目標值；再調 red/blue gains</span>
+v4l2-ctl -d /dev/v4l-subdev0 -c auto_exposure=0 -c auto_n_white_balance=0
+v4l2-ctl -d /dev/v4l-subdev0 -c exposure=2000
+v4l2-ctl -d /dev/v4l-subdev0 -c red_balance=140 -c blue_balance=110</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 4｜美化與回歸</div><pre><span class="hl-c"># 後處理 NR（單元 13）+ 輕度 sharpen，同場景前後各一張</span>
+python3 - <<'EOF'
+import cv2
+img = cv2.imread('shot.png')
+nr  = cv2.fastNlMeansDenoisingColored(img, None, 6, 6, 7, 21)
+sharp = cv2.addWeighted(nr, 1.0, cv2.GaussianBlur(nr,(0,0),1.5), -0.3, 0)
+cv2.imwrite('shot_tuned.png', sharp)
+EOF</pre></div>
+<div class="callout"><strong>完成標準：</strong>一輪「黑位→LSC→曝光/AWB→NR/Sharpen」跑完，每個步驟有記錄，同一場景校正前後各存一張可比較。</div>
+
+<h2>14.10 疑難排解決策樹：工作流卡關</h2>
+<table>
+<tr><th>現象</th><th>方向</th></tr>
+<tr><td>黑位減錯 → 畫面偏暗</td><td>OB 在中間區算，別用邊角（shading）</td></tr>
+<tr><td>LSC 後仍偏色</td><td>先確認 AWB 已做，LSC 與 AWB 順序別亂</td></tr>
+<tr><td>HDR 有 ghost</td><td>場景有運動 → 改 tone mapping</td></tr>
+<tr><td>調一個參數全畫面變</td><td>參數間耦合 → 回歸對照組</td></tr>
+<tr><td>無法重現上次結果</td><td>沒記錄 → 補齊 tuning log</td></tr>
+</table>
+<div class="callout warn"><strong>常見錯誤與陷阱：</strong>① 校正順序錯亂（先 AWB 再 LSC → 色差污染白平衡）；② 每個步驟都「順手加一點」，改動無法歸因——一次只改一個並記錄；③ 用不同場景比較——必須同場景同光源；④ 只留「改完的最終圖」不留「原始 RAW」。</div>
+
+<h2>14.11 練習</h2>
+<ol>
+<li>完成一輪完整調校工作流，產出 tuning log。</li>
+<li>建立版本管理資料夾（v1/v2…），各存 RAW + 參數。</li>
+<li>量測一個逆光場景的 RAW 亮暗值，判斷要不要 HDR。</li>
+<li>對同一 RAW 跑 tone mapping vs DOL HDR，比較 ghost 與細節。</li>
+</ol>
+
+<h2>14.12 回顧練習</h2>
 <ol>
 <li>建立 tuning 版本管理資料夾。</li>
 <li>完成一輪「校正→美化→回歸」並記錄。</li>

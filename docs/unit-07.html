@@ -46,9 +46,65 @@
 <div class="callout info"><strong>觀念：</strong>感測器內 ISP「能用但有限」——出「還可以的圖」沒問題，但專業調校（LSC 網格、CCM 分段）需要平台 ISP（如 RK3588）。</div>
 
 
+  <h2>7.3 深入原理：ISP 管線的每個階段在做什麼</h2>
+<p>無論感測器內 ISP 還是平台 ISP，校正幾乎都走同一條「經典管線」：</p>
+<div class="pipe"><span class="step">RAW</span><span class="arr">→</span><span class="step">黑位校正</span><span class="arr">→</span><span class="step">LSC</span><span class="arr">→</span><span class="step">DPC</span><span class="arr">→</span><span class="step">demosaic</span><span class="arr">→</span><span class="step">AWB</span><span class="arr">→</span><span class="step">CCM</span><span class="arr">→</span><span class="step">gamma</span><span class="arr">→</span><span class="step">NR/sharpen</span><span class="arr">→</span><span class="step">YUV</span></div>
+<p>OV5640 內建 ISP 把整條管線做在感測器內部，用 <code>0x5000</code> 一帶的開關控制各階段。每個階段的「校正空間」由對應 register 決定：</p>
+<table class="reg-table">
+<tr><th>階段</th><th>OV5640 register</th><th>性質</th></tr>
+<tr><td class="reg">黑位/OB</td><td>0x4000 帶</td><td>固定 offset 減除</td></tr>
+<tr><td class="reg">LSC</td><td>0x4600 帶</td><td>有限的 shading 表</td></tr>
+<tr><td class="reg">DPC</td><td>0x4800 帶</td><td>缺陷像素校正</td></tr>
+<tr><td class="reg">AWB</td><td>0x5180–0x51A5</td><td>R/G/B gains</td></tr>
+<tr><td class="reg">色彩矩陣</td><td>0x4750 帶</td><td>CCM</td></tr>
+</table>
+<div class="callout info"><strong>關鍵認知：</strong>「感測器內 ISP」的 register 通常只公開部分位元（其他欄位需 NDA）。本站教的是「概念與公開欄位」，正式量產調校需原廠工具與文件。</div>
+
+<h2>7.4 完整 Worked Example：切換感測器內 ISP 開關</h2>
+<div class="demo-block"><div class="demo-label">步驟 1｜查 ISP 功能開關</div><pre>for r in 0x5000 0x5001 0x5002 0x5003; do
+  echo -n "$r: "; sudo i2ctransfer -y 3 w2@0x3c ${r:2:2} ${r:4:2} r1
+done</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜關閉色彩處理（看 RAW 化效果）</div><pre>sudo i2ctransfer -y 3 w3@0x3c 0x50 0x00 0x00   <span class="hl-c"># 0x5000 bit0 控制 ISP 總開關</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜取幀看差異</div><pre>v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=YUYV \
+  --stream-mmap=3 --stream-count=1 --stream-to=isp_off.yuv</pre></div>
+<div class="callout warn"><strong>紀律：</strong>先記下「原本值」再改——改壞立刻回寫。此實驗只為理解 ISP 開關的影響；正式流程走驅動，別把板卡留在手動改壞的狀態。</div>
+
+<h2>7.5 疑難排解決策樹：ISP 效果不如預期</h2>
+<table>
+<tr><th>現象</th><th>方向</th></tr>
+<tr><td>關 ISP 後全綠/全洋紅</td><td>正常——RAW 沒 demosaic，顏色當然錯（別慌，這是「證明 ISP 在工作」的訊號）</td></tr>
+<tr><td>色彩過飽和/色偏</td><td>AWB/CCM 問題 → 回單元 11</td></tr>
+<tr><td>角落暗</td><td>LSC 沒開或表太小 → 單元 12</td></tr>
+<tr><td>雜訊明顯</td><td>NR 階段弱 → 單元 13</td></tr>
+<tr><td>全無差別</td><td>0x5000 開關對 YUYV 路徑無效 / 需重啟串流才生效</td></tr>
+</table>
+<div class="callout warn"><strong>常見錯誤與陷阱：</strong>① 忘了「register 寫入後需重啟 streaming 才套用」；② 誤以為關 ISP 會出「乾淨 RAW」——出圖仍是 YUV，只是色彩處理被關掉；③ 在無平台 ISP 的板卡上苦等 ISP 節點——先確認你的 SoC 到底有沒有。</div>
+
+<h2>7.7 深入原理：感測器內 ISP vs 平台 ISP 的調校空間對照</h2>
+<p>「能調什麼」比「有沒有 ISP」更實用。用同一個校正任務比較感測器內 ISP 與平台 ISP：</p>
+<table>
+<tr><th>任務</th><th>感測器內（OV5640）</th><th>平台 ISP（RK3588）</th><th>後處理（OpenCV）</th></tr>
+<tr><td>黑位</td><td>0x4000 帶（固定 offset）</td><td>OB 參數可分段</td><td>減常數</td></tr>
+<tr><td>LSC</td><td>表極小、公開欄位少</td><td>完整網格（如 17×13）</td><td>任意大小增益圖 ✅</td></tr>
+<tr><td>AWB</td><td>0x5180 gains</td><td>3A 引擎 + 分色溫策略</td><td>後處理 gains ✅</td></tr>
+<tr><td>CCM</td><td>欄位多不公開</td><td>完整矩陣 + 分區域</td><td>OpenCV 矩陣 ✅</td></tr>
+<tr><td>NR/Sharpen</td><td>0x5000 帶（弱）</td><td>硬體模組強</td><td>演算法任意 ✅</td></tr>
+<tr><td>即時性</td><td>✅ 感測器內</td><td>✅ 硬體管線</td><td>⚠️ 視算力</td></tr>
+</table>
+<div class="callout warn"><strong>重要陷阱：</strong>「感測器內 ISP 有 LSC」容易造成誤解——它存在但<strong>網格小、欄位多為 NDA</strong>，量產調校空間有限。真正的深度校正要靠平台 ISP 或後處理，別被 register 表格誤導。</div>
+
+<h2>7.8 練習：ISP 分工實作</h2>
+<ol>
+<li>用 <code>0x5000–0x5003</code> 開關實驗（7.4）驗證「哪一段由感測器做」，備份原始值並取幀對比。</li>
+<li>在 RK3588（若有）上找出 rkisp 節點，列出它的輸出與 controls。</li>
+<li>把「黑位 / LSC / AWB / CCM / NR」五項，填入你板卡的「誰來做」表。</li>
+<li>說明「感測器有 LSC」與「可以深度調 LSC」的差別。</li>
+<li>比較 OV5640 內建 ISP 與 RK3588 平台 ISP 的 LSC/AWB 校正空間差異。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
-    <ul><li>Orange Pi 的 ISP 現實。</li><li>OV5640 內建 AEC/AGC/AWB register 群。</li><li>RK3588 vs H6xx 差異。</li><li>感測器內 ISP 的優點與限制。</li></ul>
+    <ul><li>Orange Pi 的 ISP 現實。</li><li>OV5640 內建 AEC/AGC/AWB register 群。</li><li>RK3588 vs H6xx 差異。</li><li>感測器內 ISP 的優點與限制。</li><li>經典 ISP 管線各階段與 register 對應。</li><li>用 ISP 開關實驗驗證管線在哪一段。</li><li>感測器/平台/後處理三層的調校空間對照。</li></ul>
   </div>
 
   <h2>延伸閱讀</h2>

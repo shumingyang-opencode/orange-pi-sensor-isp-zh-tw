@@ -67,7 +67,49 @@ sudo i2ctransfer -y 3 w2@0x3c 0x35 0x00 r1</pre></div>
 <div class="demo-block"><div class="demo-label">讀感測器 ID</div><pre>sudo i2ctransfer -y 3 w2@0x3c 0x30 0x0a r1   <span class="hl-c"># 預期 OV5640 ID 高位</span></pre></div>
 <div class="callout warn"><strong>排查：</strong>讀回全 0xFF → 上拉/位址錯；讀回全 0x00 → 上電/reset 問題。用 i2ctransfer 讀寫並回讀驗證。</div>
 
-<h2>3.9 練習</h2>
+<h2>3.10 深入原理：SCCB vs I2C 與傳輸時序</h2>
+<p>OV5640 的介面原始規格叫 <strong>SCCB（Serial Camera Control Bus）</strong>，本質上是 OmniVision 對 I2C 的變體。實務上兩者相容，但有三個差異要記住：</p>
+<table>
+<tr><th>項目</th><th>SCCB（OV）</th><th>標準 I2C</th></tr>
+<tr><td>起始/停止</td><td>有（SCCB 也認 S/P）</td><td>S/P 同位元</td></tr>
+<tr><td>重複起始</td><td>傳統 SCCB 不建議</td><td>支援（combined transfer）</td></tr>
+<tr><td>位址寬度</td><td>可 8-bit/16-bit register</td><td>由裝置決定</td></tr>
+</table>
+<div class="pipe"><span class="step">START</span><span class="arr">→</span><span class="step">0x78（寫）</span><span class="arr">→</span><span class="step">reg 高 byte</span><span class="arr">→</span><span class="step">reg 低 byte</span><span class="arr">→</span><span class="step">資料 byte</span><span class="arr">→</span><span class="step">STOP</span></div>
+<p>實務上 <code>i2ctransfer</code> 的 <code>w3@0x3c</code> 就是「寫 3 byte」：前 2 byte 是 16-bit register 位址（big-endian），第 3 byte 是資料。回讀用 <code>w2@0x3c ... r1</code>：先送位址、再重複起始讀 1 byte。</p>
+<div class="callout info"><strong>匯流排電氣細節：</strong>I2C 需要上拉電阻；SDA/SCL 在 idle 都是高電位。讀回 <code>0xFF</code>（全 1）幾乎總是「沒有裝置回應」——不是電源問題就是位址/上拉問題。</div>
+
+<h2>3.11 完整 Worked Example：從掃描到讀寫的完整流程</h2>
+<div class="demo-block"><div class="demo-label">步驟 1｜掃描找裝置</div><pre>sudo i2cdetect -y 3    <span class="hl-c"># 找到 0x3c 表示 OV5640 在位</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜讀 ID 驗證</div><pre>sudo i2cget -y 3 0x3c 0x300a   <span class="hl-c"># → 0x56</span>
+sudo i2cget -y 3 0x3c 0x300b   <span class="hl-c"># → 0x40</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜寫一組 register 並回讀</div><pre><span class="hl-c"># 寫曝光低位 0x3503 = 0x03（open aperture，曝光的位元展開）</span>
+sudo i2ctransfer -y 3 w3@0x3c 0x35 0x03 0x03
+<span class="hl-c"># 回讀確認</span>
+sudo i2ctransfer -y 3 w2@0x3c 0x35 0x03 r1   <span class="hl-c"># 應回 0x03</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 4｜頁面切換（高位 register 需切 page）</div><pre><span class="hl-c"># OV5640 有些 register 在 page 1：先寫 0x3108 = 0x01</span>
+sudo i2ctransfer -y 3 w3@0x3c 0x31 0x08 0x01</pre></div>
+<div class="callout warn"><strong>紀律：</strong>手動 i2ctransfer 只做除錯/理解。正式流程一律走驅動——驅動會處理 page、時序與 init table。改壞 register 的最快復原方式是重上電，不必慌。</div>
+
+<h2>3.12 疑難排解決策樹：I2C 讀不到感測器</h2>
+<table>
+<tr><th>症狀</th><th>讀回值</th><th>方向</th></tr>
+<tr><td><code>i2cdetect</code> 沒看到 0x3c</td><td>—</td><td>檢查電源、reset、位址選擇腳、bus 編號</td></tr>
+<tr><td>讀 ID 全 <code>0xFF</code></td><td>0xFF</td><td>無上拉 / 裝置沒通電 / 位址錯</td></tr>
+<tr><td>讀 ID 全 <code>0x00</code></td><td>0x00</td><td>裝置在 reset 狀態或電源不足</td></tr>
+<tr><td>讀回值每次都不同</td><td>亂跳</td><td>bus 衝突、pull-up 太弱、時脈過快</td></tr>
+</table>
+<div class="callout warn"><strong>常見錯誤與陷阱：</strong>① 用了錯誤的 <code>-y N</code>（相機可能不在 bus 3，先 <code>i2cdetect -l</code>）；② 以為位址是 <code>0x3c</code> 就永遠對——OV5640 可被 <code>SCCB_ID</code> 腳切到 <code>0x21</code>；③ register 位址搞混 8/16-bit，導致「寫到錯的 register」。</div>
+
+<h2>3.13 練習</h2>
+<ol>
+<li>從「掃描→讀 ID→寫回讀」完整跑一遍，記錄每步輸出。</li>
+<li>故意把位址改錯一個 bit，觀察讀回值變化，寫下你的判讀。</li>
+<li>查你板卡 BSP 中 <code>ov5640</code> DT node 的 <code>reg = &lt;0x3c&gt;</code>，確認與實際相符。</li>
+<li>寫一支 shell script：<code>probe_ov5640.sh</code>，自動掃描、讀 ID、印出「OK/失敗」。</li>
+</ol>
+
+<h2>3.14 回顧練習</h2>
 <ol>
 <li>讀感測器 ID，確認與 datasheet 相符。</li>
 <li>寫一組 register 後回讀驗證。</li>

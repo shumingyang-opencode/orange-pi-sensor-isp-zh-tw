@@ -39,9 +39,70 @@
 <div class="callout"><strong>Orange Pi 定位：</strong>調校能力最弱、但也最「Linux 原生」——它逼你理解感測器端能做什麼。</div>
 
 
+  <h2>9.3 深入原理：ISP 能力由「硬體 IP + 驅動 + 工具鏈」三層決定</h2>
+<p>「平台有沒有 ISP」只是第一層。真正決定你能調校多深的是三件事疊加：</p>
+<table>
+<tr><th>層</th><th>RK3588</th><th>H618/H616</th><th>後處理（OpenCV/GStreamer）</th></tr>
+<tr><td>硬體 IP</td><td>Rockchip ISP3</td><td>多無完整平台 ISP</td><td>—（跑 CPU/GPU）</td></tr>
+<tr><td>驅動</td><td>rkisp（V4L2/subdev）</td><td>僅感測器 subdev</td><td>使用者空間</td></tr>
+<tr><td>工具鏈</td><td>Rockchip tuning 工具</td><td>V4L2 controls</td><td>python/OpenCV</td></tr>
+<tr><td>可調深度</td><td>LSC/CCM/3A 全可調</td><td>僅感測器公開 register</td><td>LSC/NR/sharpen/CCM</td></tr>
+<tr><td>即時性</td><td>✅ 硬體管線</td><td>✅ 感測器出圖</td><td>⚠️ 非即時</td></tr>
+</table>
+<div class="callout info"><strong>架構選擇的邏輯：</strong>要「即時 + 深度校正」→ 選有平台 ISP 的板卡（RK3588）；要「理解底層 + Linux 原生」→ 選 H6xx + 後處理；要「高畫質但封閉」→ NVIDIA 平台。</div>
+
+<h2>9.4 完整 Worked Example：判斷你的板卡走哪條校正路線</h2>
+<div class="demo-block"><div class="demo-label">步驟 1｜查有沒有 rkisp 節點</div><pre>ls /dev/video* ; media-ctl -p -d /dev/media0 2>/dev/null | grep -i -E "isp|rkcif"
+dmesg | grep -i -E "rkisp|cif|isp"</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜查感測器 controls 數量</div><pre>v4l2-ctl -d /dev/v4l-subdev0 --list-ctrls | wc -l   <span class="hl-c"># 少 = 只靠感測器</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜驗證後處理路線</div><pre>python3 -c "import cv2, numpy; print('cv2', cv2.__version__)"</pre></div>
+<div class="callout"><strong>完成標準：</strong>你寫得出「這片板卡 = { 感測器端校正: …，平台端: 有/無，後處理: 可/不可 }」一句話結論，並據此決定調校策略。</div>
+
+<h2>9.5 疑難排解決策樹：選錯路線會遇到的問題</h2>
+<table>
+<tr><th>症狀</th><th>根因</th><th>方向</th></tr>
+<tr><td>想開 rkisp 卻沒有節點</td><td>板卡非 RK3588 或 DT 未啟用</td><td>確認 SoC、查 BSP overlay</td></tr>
+<tr><td>後處理 LSC 太慢</td><td>在 CPU 上做整張增益</td><td>降解析度、分區塊、用 GPU 加速</td></tr>
+<tr><td>感測器 controls 只有 3–5 個</td><td>驅動實作少</td><td>接受「陽春路線」，用後處理補</td></tr>
+<tr><td>想要即時校正卻只有後處理</td><td>硬體無 ISP</td><td>升級板卡，或接受延遲</td></tr>
+</table>
+<div class="callout warn"><strong>常見錯誤與陷阱：</strong>① 把「感測器內 ISP」當成「平台 ISP」——校正空間天差地別；② 在無硬體 ISP 的板卡上硬套 Rockchip 調校流程——白費工；③ 以 RPi5 的 libcamera 經驗直接套用——介面與校正位置都不同。</div>
+
+<h2>9.6 深入原理：同一校正任務在各平台的可行做法</h2>
+<p>把調校任務拆解成「黑位 / LSC / AWB / CCM / NR / Sharpen」，每個任務在四平台的可行路徑都不同。這張表是跨平台工作的核心對照：</p>
+<table>
+<tr><th>校正任務</th><th>RK3588</th><th>H618/H616</th><th>後處理</th></tr>
+<tr><td>黑位（OB）</td><td>ISP 參數</td><td>感測器 register</td><td>減固定值</td></tr>
+<tr><td>LSC</td><td>RK ISP 網格</td><td>感測器（有限）</td><td>增益圖 ✅ 最務實</td></tr>
+<tr><td>AWB</td><td>平台 3A</td><td>感測器 AWB</td><td>後處理 gains</td></tr>
+<tr><td>CCM</td><td>ISP 矩陣 ✅</td><td>欄位多不公開</td><td>OpenCV 矩陣</td></tr>
+<tr><td>NR / Sharpen</td><td>ISP 模組 ✅</td><td>感測器（弱）</td><td>OpenCV / GStreamer ✅</td></tr>
+<tr><td>即時性</td><td>✅ 硬體管線</td><td>✅ 感測器出圖</td><td>⚠️ 視 CPU</td></tr>
+</table>
+<div class="demo-block"><div class="demo-label">檢查你的板卡支援到哪</div><pre><span class="hl-c"># 平台 ISP 是否存在（RK3588 才可能）</span>
+media-ctl -p -d /dev/media0 2>/dev/null | grep -i -E "isp|cif|rkcif"
+<span class="hl-c"># 感測器端能控到哪些校正</span>
+v4l2-ctl -d /dev/v4l-subdev0 --list-ctrls
+<span class="hl-c"># 後處理工具是否就緒</span>
+python3 -c "import cv2; print('OpenCV OK', cv2.__version__)"
+gst-inspect-1.0 2>/dev/null | grep -i -E "videobalance|gamma" | head -3</pre></div>
+<div class="callout"><strong>結論框架：</strong>你的校正架構 = 「感測器能做的」＋「平台 ISP 能做的（若存在）」＋「後處理補足的」。三層各自有一張能力表，先填表再動手，不會亂。</div>
+
+<h2>9.7 練習：架構對照演練</h2>
+<ol>
+<li>用上面的指令逐層確認你板卡的校正能力，填出一張「三層能力表」。</li>
+<li>對「LSC」「NR」「CCM」三個任務，各寫出你板卡的推薦做法與理由。</li>
+<li>若後處理是主力，列出即時性風險與緩解（降解析度/GPU/預先算好表）。</li>
+<li>說明「RK3588 有 ISP」≠「一定比 H618 好調」的條件（工具鏈與文件）。</li>
+<li>完成 Worked Example，寫出你板卡的「三層校正能力結論」。</li>
+<li>用 <code>--list-ctrls</code> 統計 controls 數量，推測你板卡的調校深度。</li>
+<li>比較「後處理 LSC」與「平台 ISP LSC」在延遲與品質上的差別。</li>
+<li>若你同時有 RK3588 與 H618 板卡，分別列出各自的校正分工表。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
-    <ul><li>四平台校正主力概覽。</li><li>Orange Pi 靠感測器內建。</li><li>限制反而強化感測器理解。</li><li>何時升級到有平台 ISP 的板卡。</li></ul>
+    <ul><li>四平台校正主力概覽。</li><li>Orange Pi 靠感測器內建。</li><li>限制反而強化感測器理解。</li><li>何時升級到有平台 ISP 的板卡。</li><li>ISP 能力由「硬體+驅動+工具鏈」三層決定。</li><li>用 Worked Example 判斷板卡校正路線。</li></ul>
   </div>
 
   <h2>延伸閱讀</h2>

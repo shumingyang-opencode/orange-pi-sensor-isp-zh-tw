@@ -57,9 +57,74 @@
 
 
 
+  <h2>8.9 深入原理：RAW packing 與 bytesperline</h2>
+<p>RAW 不是「每個像素一個 16-bit 值」那麼單純——V4L2 用 <code>pixelformat</code> 的位元描述 packing：</p>
+<table class="reg-table">
+<tr><th>fourcc</th><th>每像素位元</th><th>packing</th></tr>
+<tr><td class="reg">SRGGB8</td><td>8</td><td>每 byte 1 像素</td></tr>
+<tr><td class="reg">SRGGB10</td><td>10</td><td>16-bit 容器存 10-bit（低 6 bit 補 0）</td></tr>
+<tr><td class="reg">SRGGB10P</td><td>10</td><td>packed，跨 byte 連續</td></tr>
+<tr><td class="reg">SRGGB12</td><td>12</td><td>16-bit 容器存 12-bit</td></tr>
+</table>
+<p><strong>bytesperline</strong> 是「一列影像在記憶體佔多少 byte」，常因硬體對齊而大於「寬 × 每像素 bytes」。用 <code>v4l2-ctl --get-fmt-video</code> 可看到 <code>bytesperline</code> 與 <code>sizeimage</code>，程式必須用這兩個值而非「寬×高×bpp」去讀 buffer。</p>
+<div class="callout info"><strong>實務後果：</strong>如果程式假設「每列剛好 寬×bpp」，碰到對齊的 bytesperline 會整張圖斜掉或出現條紋——這是 RAW 除錯最經典的 bug 之一。</div>
+
+<h2>8.10 完整 Worked Example：正確讀取 RAW buffer</h2>
+<div class="demo-block"><div class="demo-label">步驟 1｜取 RAW 幀</div><pre>v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=SRGGB10 \
+  --stream-mmap=3 --stream-count=1 --stream-to=raw.bin</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜用 bytesperline 重組</div><pre>v4l2-ctl -d /dev/video0 --get-fmt-video   <span class="hl-c"># 讀 bytesperline / sizeimage</span>
+python3 - <<'EOF'
+import numpy as np, struct
+# 假設 bytesperline=2560, height=720, bpp=2
+raw = np.fromfile('raw.bin', dtype=np.uint16).reshape(720, 1280)
+print('R/Gr/Gb/B =', raw[0::2,0::2].mean(), raw[0::2,1::2].mean(),
+      raw[1::2,0::2].mean(), raw[1::2,1::2].mean())
+EOF</pre></div>
+<div class="callout warn"><strong>紀律：</strong>永遠用 <code>--get-fmt-video</code> 回傳的 <code>bytesperline</code>/<code>sizeimage</code> 配置讀取，不要手算。記錄你板卡的實際對齊值，寫進 team SOP。</div>
+
+<h2>8.11 疑難排解決策樹：RAW 影像異常</h2>
+<table>
+<tr><th>現象</th><th>原因</th><th>檢查</th></tr>
+<tr><td>整圖斜掉/鋸齒</td><td>bytesperline 對齊沒算</td><td>改用 get-fmt 回傳值</td></tr>
+<tr><td>色彩全亂</td><td>Bayer order 錯</td><td>拍色卡驗四通道</td></tr>
+<tr><td>暗部斷階/條紋</td><td>位元深讀錯</td><td>確認 SRGGB10P vs SRGGB10</td></tr>
+<tr><td>畫面偏綠</td><td>沒做黑位校正就看</td><td>RAW 本來就該偏色——先校正再看</td></tr>
+<tr><td>尺寸不對</td><td>sizeimage 含 padding</td><td>以 sizeimage 為準</td></tr>
+</table>
+<div class="callout warn"><strong>常見錯誤與陷阱：</strong>① 用 JPEG/PNG 轉出的「偽 RAW」分析——有損壓縮毀掉統計；② <code>SRGGB10</code> 與 <code>SRGGB10P</code> 搞混——padded 與 packed 的位元佈局不同；③ 不同解析度/binning 下 Bayer order 可能不同——每次換模式都要重新確認。</div>
+
+<h2>8.12 深入原理：YUV 與 NV12 的布局</h2>
+<p>除了 RAW，Orange Pi 也可能輸出 YUV（感測器內 ISP）或 NV12（平台後處理）。布局完全不同：</p>
+<table class="reg-table">
+<tr><th>格式</th><th>布局</th><th>每像素平均</th></tr>
+<tr><td class="reg">YUYV / UYVY</td><td>交錯 Y0 U0 Y1 V0</td><td>2 byte</td></tr>
+<tr><td class="reg">NV12</td><td>全部 Y 平面 + 交錯 UV 平面</td><td>1.5 byte</td></tr>
+<tr><td class="reg">NV21</td><td>全部 Y 平面 + 交錯 VU 平面</td><td>1.5 byte</td></tr>
+</table>
+<p>1280×720 的 YUYV 大小 = 1280×720×2 = 1,843,200 byte；NV12 則是 1280×720×1.5 = 1,382,400 byte。兩者「同解析度但 sizeimage 不同」——所以<strong>永遠以 fourcc + get-fmt 的 sizeimage 為準</strong>。</p>
+<div class="demo-block"><div class="demo-label">判斷檔案是 YUYV 還是 NV12</div><pre><span class="hl-c"># 比較實際檔案大小與兩種理論值</span>
+ls -l frame.bin
+python3 - <<'EOF'
+W,H = 1280,720
+import os
+n = os.path.getsize('frame.bin')
+print('YUV422 =', W*H*2, ' NV12 =', W*H*3//2, ' actual =', n)
+EOF</pre></div>
+<div class="callout info"><strong>為什麼要懂布局：</strong>後處理（OpenCV/GStreamer）需要正確的 caps；解析器（如 FFmpeg）會用布局假設去解資料。布局猜錯 → 畫面斜掉或綠紫分離。</div>
+
+<h2>8.13 練習：格式驗證總複習</h2>
+<ol>
+<li>取 SRGGB10 幀，用 <code>--get-fmt-video</code> 的 bytesperline 正確重組並印四通道均值。</li>
+<li>分別取 YUYV 與 RAW 幀，用 sizeimage 驗證每種格式的理論大小。</li>
+<li>比較 SRGGB10 vs SRGGB8 的 <code>sizeimage</code>，解釋差異。</li>
+<li>故意用「寬×bpp」誤讀一次，記錄出現什麼現象。</li>
+<li>寫一支小程式：讀 YUYV 檔，輸出 Y、U、V 三平面各自大小。</li>
+<li>在不同解析度各取一幀，驗證 Bayer order 是否一致。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
-    <ul><li>V4L2 fourcc 與 RAW/YUV 路線。</li><li>查感測器支援格式。</li><li>Bayer order 陷阱。</li><li>固定格式/解析度調校。</li></ul>
+    <ul><li>V4L2 fourcc 與 RAW/YUV 路線。</li><li>查感測器支援格式。</li><li>Bayer order 陷阱。</li><li>固定格式/解析度調校。</li><li>RAW packing 與 bytesperline 對齊。</li><li>正確讀取 RAW buffer 的 Worked Example。</li><li>YUV/NV12 布局與 sizeimage 驗證。</li></ul>
   </div>
 
   <h2>延伸閱讀</h2>

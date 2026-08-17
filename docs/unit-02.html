@@ -57,9 +57,52 @@
 </table>
 
 
+  <h2>2.5 深入原理：從光子到數位的位元級旅程</h2>
+<p>感測器輸出的 RAW 不是「照片」，而是一串 <strong>依 Bayer order 排列的單色強度</strong>。理解這層，之後的 RAW 驗證（單元 8）才有基礎。</p>
+<div class="pipe"><span class="step">光子</span><span class="arr">→</span><span class="step">photodiode 累積電荷</span><span class="arr">→</span><span class="step">CDS（消除復位雜訊）</span><span class="arr">→</span><span class="step">類比增益</span><span class="arr">→</span><span class="step">ADC</span><span class="arr">→</span><span class="step">數位 RAW</span></div>
+<ul>
+<li><strong>像素飽和容量（full well）</strong>：單一像素能裝的電子數，決定「最亮」能到哪。</li>
+<li><strong>ADC 位元數</strong>：OV5640 輸出 10-bit；數位值範圍 0–1023。RAW 檔案標示 <code>SRGGB10</code> 的「10」就是這個。</li>
+<li><strong>readout</strong>：逐列把電荷讀出。由於逐列讀出，rolling shutter 的「同一時刻」在不同列其實不同——高速物體會歪斜。</li>
+</ul>
+<div class="callout info"><strong>位元深與後處理：</strong>10-bit RAW 若要後處理（LSC、NR），最好在 RAW 位域上做，最後才 quantize 成 8-bit YUV。先壓成 8-bit 再處理，會放大 banding 與斷階。</div>
+
+<h2>2.6 完整 Worked Example：驗證 OV5640 的 Bayer order</h2>
+<p>光看規格表說 RGGB 不夠——實際「拍出來的 RAW 是 RGGB」要驗證。最可靠的方法：<strong>拍單色色卡</strong>，再檢查 RAW 四通道的強度分佈。</p>
+<div class="demo-block"><div class="demo-label">步驟 1｜設定 RAW 格式並取一幀</div><pre>v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=SRGGB10 \
+  --stream-mmap=3 --stream-count=1 --stream-to=raw.bin</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜用 Python 檢查四通道均值</div><pre>python3 - <<'EOF'
+import numpy as np
+raw = np.fromfile('raw.bin', dtype=np.uint16).reshape(720, 1280)
+r  = raw[0::2, 0::2]    <span class="hl-c"># R  位置（假設 RGGB 起點）</span>
+gr = raw[0::2, 1::2]    <span class="hl-c"># Gr</span>
+gb = raw[1::2, 0::2]    <span class="hl-c"># Gb</span>
+b  = raw[1::2, 1::2]    <span class="hl-c"># B</span>
+print('R Gr Gb B =', r.mean(), gr.mean(), gb.mean(), b.mean())
+EOF</pre></div>
+<div class="callout"><strong>判讀：</strong>拍「純紅」色卡時，四個均值中 <code>R</code> 應最高；拍純藍時 <code>B</code> 最高；拍灰卡時四者應接近。若 R/B 對調，Bayer order 就是 BGGR（或設定錯）。</div>
+
+<h2>2.7 疑難排解決策樹：RAW 驗證不通過</h2>
+<table>
+<tr><th>現象</th><th>可能原因</th><th>檢查</th></tr>
+<tr><td>四通道全接近 0</td><td>鏡頭蓋著/曝光太低/黑位</td><td>開蓋、開自動曝光、確認有光</td></tr>
+<tr><td>R 與 B 對調</td><td>Bayer order 假設錯</td><td>換成 BGGR 重算</td></tr>
+<tr><td>Gr 與 Gb 明顯不同</td><td>灰卡不均或 shading</td><td>拍中央小區塊、之後做 LSC（單元 12）</td></tr>
+<tr><td>數值跳動、非整數步階</td><td>10-bit 被當 8-bit 讀</td><td>確認 packing 與 dtype</td></tr>
+</table>
+<div class="callout warn"><strong>常見錯誤與陷阱：</strong>① 把 <code>SRGGB10</code> 用 <code>np.uint8</code> 讀——packing 完全不同；② 鏡頭蓋著就開始驗證 Bayer——先確認曝光正常；③ 用 JPEG/PNG 來判斷 Bayer order——有損壓縮會污染資料，必須用 RAW。</div>
+
+<h2>2.8 練習</h2>
+<ol>
+<li>重現 Worked Example：取一張 RAW，計算四通道均值並判讀 order。</li>
+<li>用 <code>v4l2-ctl --list-formats-ext</code> 記錄你的板卡支援哪些 RAW fourcc 與位元深。</li>
+<li>查 OV5640 的 full well / ADC bit 數值，寫出「最高數位值」應是多少。</li>
+<li>說明為什麼「先量化成 8-bit 再後處理」會劣化畫質。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
-    <ul><li>感測器光→RAW 流程。</li><li>OV5640 RGGB 與 5MP 規格。</li><li>Rolling/Global 差異。</li><li>OV5640 完整規格與 I2C 位址。</li></ul>
+    <ul><li>感測器光→RAW 流程。</li><li>OV5640 RGGB 與 5MP 規格。</li><li>Rolling/Global 差異。</li><li>OV5640 完整規格與 I2C 位址。</li><li>full well / ADC bit 的意義。</li><li>用 RAW 四通道驗證 Bayer order。</li></ul>
   </div>
 
   <h2>延伸閱讀</h2>

@@ -59,7 +59,7 @@ SNR = 20*log10(400/20) = 26 dB   <span class="hl-c"># 不達標</span>
 <li><strong>NR 後</strong>：處理統計性雜訊。</li>
 <li>驗證：黑框 RAW 的 max 應被壓制。</li>
 </ul>
-<h2>13.6 深入：雜訊量測與增益上限</h2>
+<h2>13.8 深入：雜訊量測與增益上限</h2>
 <div class="demo-block"><div class="demo-label">量 σ vs gain</div><pre>python3 - <<'EOF'
 import rawpy, numpy as np, subprocess
 for g in [1, 2, 4, 8]:
@@ -70,7 +70,62 @@ for g in [1, 2, 4, 8]:
 EOF</pre></div>
 <div class="callout"><strong>判讀：</strong>σ 暴增的增益區間 = 不可接受 → 設定增益上限，改用曝光補。</div>
 
-<h2>13.7 練習</h2>
+<h2>13.9 深入原理：雜訊模型與 SNR 數學</h2>
+<p>雜訊不是「隨機骯髒」——它可被數學模型預測，這是雜訊預算的基礎：</p>
+<table class="reg-table">
+<tr><th>雜訊項</th><th>模型</th><th>特性</th></tr>
+<tr><td class="reg">Shot noise</td><td>σ_shot ∝ √(S)</td><td>光子隨機性，與訊號綁定</td></tr>
+<tr><td class="reg">Read noise</td><td>σ_read ≈ 常數</td><td>讀出電路，低光主導</td></tr>
+<tr><td class="reg">Dark current</td><td>σ_dark ∝ t × T</td><td>長曝光/高溫上升</td></tr>
+<tr><td class="reg">Fixed pattern</td><td>常數 offset</td><td>固定圖樣，黑位校正移除</td></tr>
+</table>
+<p><strong>SNR 公式</strong>：SNR = 20·log₁₀(S / σ_total)。增益放大「訊號與雜訊一起」——所以「拉增益」不會改善 SNR，只會讓影像看起來更亮、雜訊也更明顯。要提升 SNR，只能：增加光子（補光/加長曝光）或降低 read noise。</p>
+<div class="callout info"><strong>設計意涵：</strong>低光場景的黃金順序 = 加長曝光（若無 motion blur 風險）→ 補光 → 最後才拉增益。這就是單元 10 鐵則的數學依據。</div>
+
+<h2>13.10 完整 Worked Example：量測 σ 並設定增益上限</h2>
+<div class="demo-block"><div class="demo-label">步驟 1｜關 AGC、鎖定曝光、逐級設增益</div><pre>v4l2-ctl -d /dev/v4l-subdev0 -c auto_exposure=0 -c auto_gain=0
+for g in 64 128 256 512 1024; do
+  v4l2-ctl -d /dev/v4l-subdev0 -c gain=$g
+  v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=1 --stream-to=g$g.raw
+done</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜統計暗部 ROI 的 σ</div><pre>python3 - <<'EOF'
+import numpy as np
+for g in [64,128,256,512,1024]:
+    raw = np.fromfile(f'g{g}.raw', dtype=np.uint16).reshape(720,1280)
+    roi = raw[500:1500,500:1500].astype(float)
+    print(f'gain={g:5d}  σ={roi.std():6.1f}  mean={roi.mean():6.1f}')
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜算每檔 SNR 並找上限</div><pre><span class="hl-c"># 對暗部：SNR = 20*log10(mean/σ)</span>
+python3 - <<'EOF'
+import numpy as np
+for g in [64,128,256,512,1024]:
+    raw = np.fromfile(f'g{g}.raw', dtype=np.uint16).reshape(720,1280)
+    roi = raw[500:1500,500:1500].astype(float)
+    snr = 20*np.log10(roi.mean()/max(roi.std(),1e-6))
+    print(f'gain={g:5d}  SNR={snr:5.1f} dB')
+EOF</pre></div>
+<div class="callout"><strong>完成標準：</strong>畫出「增益 vs SNR」曲線，找出 SNR 掉到目標（如 30dB）以下的增益檔位，把「該檔以上」訂為增益上限並寫進調校文件。</div>
+
+<h2>13.11 疑難排解決策樹：雜訊問題</h2>
+<table>
+<tr><th>現象</th><th>方向</th></tr>
+<tr><td>整片顆粒感</td><td>增益太高 → 降增益、加曝光/補光</td></tr>
+<tr><td>固定亮點（hot pixel）</td><td>缺陷像素 → DPC 先做</td></tr>
+<tr><td>長曝光才出現亮點</td><td>dark current → 縮短曝光或降溫</td></tr>
+<tr><td>條紋狀雜訊</td><td>read noise / 電源干擾 → 查電源、時序</td></tr>
+<tr><td>NR 後糊掉</td><td>NR 過強 → 取捨細節</td></tr>
+</table>
+<div class="callout warn"><strong>常見錯誤與陷阱：</strong>① 在過曝區量 σ——飽和區 σ 失真；② 用 JPEG 量雜訊——壓縮掩蓋真實 σ；③ 忽略 DPC，先上 NR——缺陷像素被 NR 擴散成亮斑；④ 追求「零雜訊」把 NR 開滿——畫面變塑膠。工程目標是「可接受 SNR」，不是零雜訊。</div>
+
+<h2>13.12 練習</h2>
+<ol>
+<li>完成 σ 量測與 SNR 計算，輸出「增益 vs SNR」表。</li>
+<li>訂出你場景的增益上限並寫進 SOP。</li>
+<li>比較 DPC 前/後、NR 前/後的影像，記錄取捨。</li>
+<li>說明「拉增益為何不改善 SNR」，用公式推導。</li>
+</ol>
+
+<h2>13.13 回顧練習</h2>
 <ol>
 <li>量測各增益 σ。</li>
 <li>決定增益上限並記錄。</li>

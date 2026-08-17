@@ -46,9 +46,50 @@
 <div class="callout warn"><strong>先確認：</strong>查你板卡 BSP / 社群 overlay 的「已知可用組合」再動手。</div>
 
 
+  <h2>1.5 深入原理：CSI-2 與 ISP 硬體區塊</h2>
+<p>「能不能接相機」最終由 SoC 的<strong>硬體 IP 區塊</strong>決定，而不是板卡品牌。Orange Pi 常見的兩條路線各有一套硬體結構：</p>
+<table class="reg-table">
+<tr><th>SoC</th><th>CSI-2 接收器</th><th>ISP</th><th>頻道/VC</th></tr>
+<tr><td>RK3588</td><td>4× MIPI CSI-2 D-PHY（可達 2.5 Gbps/lane）</td><td class="val">有（Rockchip ISP3）</td><td>多 virtual channel</td></tr>
+<tr><td>H618 / H616</td><td>1× MIPI CSI-2 D-PHY</td><td class="val">多無完整平台 ISP</td><td>單一主要 channel</td></tr>
+</table>
+<p><strong>關鍵名詞</strong>：CSI-2 的資料以一組 <strong>lanes</strong>（資料通道）傳輸，每個 frame 內可帶 <strong>virtual channel（VC）</strong> 標籤以多工多顆感測器。RK3588 的 4 組接收器讓它「理論上」能同時接多顆相機——這就是單元 16 多相機的硬體前提。</p>
+<p>在 Linux 中，這些硬體區塊不是直接存取，而是透過 <strong>media controller</strong> 曝光成一個圖（graph）：每個硬體區塊是一個 <code>entity</code>，實體之間的連線是 <code>link</code>。kernel 會建立 <code>/dev/media0</code>，並在 probe 成功時把感測器掛上圖。</p>
+<div class="callout info"><strong>為什麼要懂這一層：</strong>所有「沒畫面」的除錯，最後都要回到「硬體區塊有沒有被 kernel 建立並連結」。理解 media graph 就等於拿到一張「相機系統的電路圖」。</div>
+
+<h2>1.6 完整 Worked Example：盤點你手上的板卡</h2>
+<p>拿到任何一片 Orange Pi，第一步是「盤點生態」：知道 kernel 有沒有內建相機支援、I2C 有哪些 bus、video 節點存在與否。下面從登入到列管的完整流程：</p>
+<div class="demo-block"><div class="demo-label">步驟 1｜確認 SoC 與 kernel</div><pre>uname -a                          <span class="hl-c"># 看架構與 kernel 版本</span>
+cat /etc/os-release | head -3     <span class="hl-c"># 確認發行版（Armbian / Orange Pi OS…）</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜找相機相關節點與驅動</div><pre>ls /dev/video* 2>/dev/null        <span class="hl-c"># 有 /dev/video0 代表有 video device</span>
+ls /dev/v4l-subdev* 2>/dev/null   <span class="hl-c"># subdev 節點（感測器/CSI）</span>
+dmesg | grep -i -E "ov5640|csi|camera|mipi"</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜列出 I2C bus</div><pre>ls /dev/i2c-*                     <span class="hl-c"># 找相機掛在哪個 bus</span>
+sudo i2cdetect -l                 <span class="hl-c"># 每個 bus 的編號與種類</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 4｜media graph 一覽</div><pre>media-ctl -p -d /dev/media0 2>/dev/null || echo "無 /dev/media0"</pre></div>
+<div class="callout"><strong>完成標準：</strong>你能回答三件事：① 是哪顆 SoC；② 系統有沒有建立相機節點；③ 相機 I2C 掛在哪個 bus。這三題就是單元 6 bring-up 的起點。</div>
+
+<h2>1.7 疑難排解決策樹：這片板卡能不能做相機？</h2>
+<table>
+<tr><th>節點</th><th>問題</th><th>下一步</th></tr>
+<tr><td>有 <code>/dev/video0</code></td><td>相機節點已存在</td><td>直接看單元 5 取流</td></tr>
+<tr><td>無 <code>/dev/video0</code>，dmesg 有 probe 失敗</td><td>驅動/DT 有問題</td><td>單元 6 dmesg 除錯</td></tr>
+<tr><td>無節點、dmesg 完全沒有相機字樣</td><td>DT 未啟用相機節點</td><td>查 BSP 的 overlay / config，啟動 CSI + I2C</td></tr>
+<tr><td>有節點但 <code>media-ctl -p</code> 空</td><td>管線未連結</td><td>單元 5 media-ctl 建 link</td></tr>
+</table>
+<div class="callout warn"><strong>常見錯誤與陷阱：</strong>許多人一拿到板卡就急著買鏡頭、看「能不能拍照」。真正的檢查順序是 <strong>節點 → 驅動 → I2C → 出圖</strong>。BSP 的「已知可用組合」是最短捷徑——先確認你要接的模組與官方支援清單一致，否則第一步就卡住。</div>
+
+<h2>1.8 練習</h2>
+<ol>
+<li>在真機上執行 Worked Example 的四步驟，記錄 <code>uname -a</code>、<code>ls /dev/video*</code>、I2C bus 清單。</li>
+<li>用 <code>dmesg</code> 找出你板卡 kernel 中與相機相關的三條訊息，寫出它們的意義。</li>
+<li>查你板卡 BSP 的「已知可用相機組合」，把它貼進你的筆記。</li>
+<li>畫出你板卡的 media graph 草圖（感測器 → CSI → video），對照 <code>media-ctl -p</code> 輸出。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
-    <ul><li>Orange Pi 的 SoC 決定相機能力。</li><li>V4L2 / media controller 管線。</li><li>OV5640 是 Linux 上最常見 OV 感測器。</li><li>先確認板卡 BSP 支援。</li></ul>
+    <ul><li>Orange Pi 的 SoC 決定相機能力。</li><li>V4L2 / media controller 管線。</li><li>OV5640 是 Linux 上最常見 OV 感測器。</li><li>先確認板卡 BSP 支援。</li><li>media graph 中 entity/link 的意義。</li><li>用四步 Worked Example 盤點板卡相機生態。</li></ul>
   </div>
 
   <h2>延伸閱讀</h2>

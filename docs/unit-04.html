@@ -45,9 +45,55 @@ v4l2-ctl -d /dev/v4l-subdev0 --list-ctrls   <span class="hl-c"># 列出感測器
 <div class="callout"><strong>調適關鍵：</strong>V4L2 controls（曝光、gain、白平衡）就是「感測器 register 的抽象介面」——調校透過它們，不手寫 register。</div>
 
 
+  <h2>4.4 深入原理：subdev 生命週期與 media graph 結構</h2>
+<p><code>ov5640.c</code> 這類 subdev 驅動不是「直接被使用者呼叫」，而是掛在 <strong>media graph</strong> 上由管線控制器驅動。它的核心回呼（v4l2_subdev_ops）對應感測器硬體狀態：</p>
+<table class="reg-table">
+<tr><th>subdev op</th><th>觸發時機</th><th>OV5640 內部行為</th></tr>
+<tr><td class="reg">init_cfg / set_fmt</td><td>media-ctl 設定格式</td><td>切解析度/時序 table</td></tr>
+<tr><td class="reg">s_power(1)</td><td>開電源</td><td>上電時序、跑 init table</td></tr>
+<tr><td class="reg">s_stream(1)</td><td>開始串流</td><td>設 MIPI 輸出、開始出圖</td></tr>
+<tr><td class="reg">s_ctrl</td><td>v4l2-ctl 改 control</td><td>寫對應 register（曝光/增益/白平衡）</td></tr>
+</table>
+<p>一個完整的相機管線是「圖」不是「鏈」：</p>
+<div class="pipe"><span class="step">ov5640 subdev</span><span class="arr">→</span><span class="step">csi2 receiver</span><span class="arr">→</span><span class="step">(ISP)</span><span class="arr">→</span><span class="step">video node</span><span class="arr">→</span><span class="step">userspace</span></div>
+<p>每個節點在 kernel 是 <code>struct media_entity</code>；連結 <code>struct media_link</code>。使用者透過 <code>/dev/media0</code> 與 <code>media-ctl</code> 操作圖，透過 <code>/dev/v4l-subdevN</code> 與 subdev 溝通，透過 <code>/dev/videoN</code> 拿資料。</p>
+<div class="callout info"><strong>為什麼 framework 這樣設計：</strong>感測器與 ISP 不必知道彼此細節，只要遵守 subdev 介面。這正是「換平台原理可平移」的根本——驅動介面在四平台（RPi5/Orange Pi/Orin/Thor）概念一致。</div>
+
+<h2>4.5 完整 Worked Example：跟蹤 subdev 與 video 節點</h2>
+<div class="demo-block"><div class="demo-label">步驟 1｜列 media graph</div><pre>media-ctl -p -d /dev/media0</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜對照 /dev 節點</div><pre>v4l2-ctl --list-devices</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜讀感測器 controls</div><pre>v4l2-ctl -d /dev/v4l-subdev0 --list-ctrls</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 4｜觀察 kernel 物件</div><pre>cat /sys/class/video4linux/video0/name   <span class="hl-c"># device name</span>
+readlink -f /sys/class/video4linux/video0/device   <span class="hl-c"># 對應 DT 節點</span></pre></div>
+<div class="callout"><strong>完成標準：</strong>你能指出「media graph 的哪個 entity 對應 /dev 的哪個節點」，並能說出該節點由哪段 DT/哪個驅動負責。</div>
+
+<h2>4.6 疑難排解決策樹：節點/管線對不上</h2>
+<table>
+<tr><th>現象</th><th>可能原因</th><th>檢查</th></tr>
+<tr><td><code>media-ctl -p</code> 只有感測器沒有 video</td><td>管線後端未 probe / ISP 驅動沒載入</td><td>dmesg 看 csi/isp 錯誤</td></tr>
+<tr><td><code>--list-ctrls</code> 沒列出曝光/增益</td><td>驅動沒實作該 control / 模式不同</td><td>切到另一解析度再列</td></tr>
+<tr><td>改 control 回傳 EINVAL</td><td>值超出 min/max 或格式不符</td><td>看 --list-ctrls 的範圍</td></tr>
+<tr><td>video 節點拿不到 buffer</td><td>管線 link 未建 / 格式不符</td><td>media-ctl 建 link 並統一格式</td></tr>
+</table>
+<div class="callout warn"><strong>常見錯誤與陷阱：</strong>① 把 <code>/dev/video0</code> 誤當感測器——感測器是 <code>/dev/v4l-subdev*</code>，兩者 API 不同；② 在沒有平台 ISP 的板卡上想找「ISP 節點」——H618/H616 多半沒有，別浪費時間；③ 用 <code>v4l2-ctl -d /dev/video0</code> 控制感測器——那會設定 video 節點而非 subdev。</div>
+
+<h2>4.8 深入：從 /sys 追蹤驅動狀態</h2>
+<div class="demo-block"><div class="demo-label">/sys 觀察驅動生命週期</div><pre>readlink -f /sys/class/video4linux/video0/device   <span class="hl-c"># 指向 DT 節點</span>
+cat /sys/class/video4linux/video0/name             <span class="hl-c"># 節點名稱</span>
+cat /sys/bus/i2c/devices/3-003c/name               <span class="hl-c"># 感測器 i2c device name</span></pre></div>
+<div class="callout info"><strong>除錯利器：</strong>當 <code>media-ctl -p</code> 的輸出與預期不符，先看 <code>/sys</code> 確認驅動真的綁定到硬體。綁定成功才談管線。</div>
+
+<h2>4.7 練習</h2>
+<ol>
+<li>畫出你板卡完整的 media graph，標註每個 entity 的類型（subdev/video）。</li>
+<li>用 <code>--list-ctrls</code> 找出曝光、增益、白平衡的 id/範圍/單位。</li>
+<li>在 kernel source 中找到 <code>ov5640.c</code> 的 <code>s_stream</code>，讀它做了哪三件事。</li>
+<li>說明「video 節點」與「subdev 節點」的 API 差別，並各舉一個使用情境。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
-    <ul><li>V4L2 subdev 與 media 管線。</li><li>ov5640.c 是 Linux 驅動範本。</li><li>V4L2 controls 是 register 的抽象。</li><li>media-ctl/v4l2-ctl 查管線與 controls。</li></ul>
+    <ul><li>V4L2 subdev 與 media 管線。</li><li>ov5640.c 是 Linux 驅動範本。</li><li>V4L2 controls 是 register 的抽象。</li><li>media-ctl/v4l2-ctl 查管線與 controls。</li><li>subdev 生命週期回呼與硬體狀態對應。</li><li>節點與管線對不上的排解方向。</li></ul>
   </div>
 
   <h2>延伸閱讀</h2>

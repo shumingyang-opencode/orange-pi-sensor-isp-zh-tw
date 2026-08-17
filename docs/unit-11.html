@@ -52,7 +52,74 @@ v4l2-ctl -d /dev/v4l-subdev0 -c blue_balance=128         <span class="hl-c"># B 
 </ol>
 <div class="callout warn"><strong>陷阱：</strong>感測器端 AWB 對混合色溫不準；要精準色彩，關閉感測器 AWB、改平台端做。</div>
 
-<h2>11.7 練習</h2>
+<h2>11.8 深入原理：色溫、色彩向量與 CCM</h2>
+<p>AWB 只解決「白平衡」——讓灰卡變灰。真正讓顏色「準」還需要 <strong>CCM（色彩校正矩陣）</strong>：把感測器響應換算到目標色彩空間。</p>
+<table>
+<tr><th>概念</th><th>意義</th><th>OV5640</th></tr>
+<tr><td>色溫（K）</td><td>光源偏藍(高)/偏黃(低)</td><td>AWB 依此估 gains</td></tr>
+<tr><td>AWB gains</td><td>R/G、B/G 比值</td><td>0x5180 帶</td></tr>
+<tr><td>CCM</td><td>3×3 矩陣校正色偏</td><td>0x4750 帶（部分公開）</td></tr>
+<tr><td>灰卡白點</td><td>中性參考</td><td>校正基準</td></tr>
+</table>
+<p><strong>灰卡校正為什麼可靠：</strong>灰卡（如 18% gray）在可見光譜中性反射。把「灰卡在影像中 R=G=B」當條件解出 gains，就得到該光源的 AWB。CCM 則在固定光源下用色卡（如 ColorChecker）解矩陣。</p>
+<div class="callout info"><strong>感測器端 vs 平台端：</strong>感測器內 AWB 只有 gains、CCM 欄位多半不公開——所以「精準色彩」在 Orange Pi 上通常要後處理補 CCM。</div>
+
+<h2>11.9 完整 Worked Example：灰卡校正 SOP</h2>
+<div class="demo-block"><div class="demo-label">步驟 1｜固定光源與曝光</div><pre><span class="hl-c"># 關自動曝光與 AWB，鎖定曝光，避免灰卡亮度跑掉</span>
+v4l2-ctl -d /dev/v4l-subdev0 -c auto_exposure=0
+v4l2-ctl -d /dev/v4l-subdev0 -c exposure=2000
+v4l2-ctl -d /dev/v4l-subdev0 -c auto_n_white_balance=0</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜拍灰卡</div><pre>v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=YUYV \
+  --stream-mmap=3 --stream-count=1 --stream-to=gray.yuv</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜量灰卡區的 RGB</div><pre>python3 - <<'EOF'
+import numpy as np
+yuv = np.fromfile('gray.yuv', dtype=np.uint8).reshape(720,1280,2)
+y  = yuv[...,0].astype(float)
+u  = (yuv[...,1]-128).astype(float)
+v  = (yuv[...,1]-128).astype(float)   <span class="hl-c"># 簡化：用中央區</span>
+roi = y[300:420, 500:780]
+print('Y mean =', roi.mean())        <span class="hl-c"># 曝光基準參考</span>
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 4｜手動調 gains 讓灰卡中性</div><pre>v4l2-ctl -d /dev/v4l-subdev0 -c red_balance=140
+v4l2-ctl -d /dev/v4l-subdev0 -c blue_balance=110
+v4l2-ctl -d /dev/v4l-subdev0 -C red_balance -C blue_balance</pre></div>
+<div class="callout"><strong>完成標準：</strong>在不同色溫（日光燈/白熾燈/陰天窗邊）各做一次，建立「色溫 → red/blue gains」查表。這張表就是你後續固定色溫場景的起點。</div>
+
+<h2>11.10 疑難排解決策樹：色彩問題</h2>
+<table>
+<tr><th>現象</th><th>方向</th></tr>
+<tr><td>整體偏黃/偏藍</td><td>AWB 沒收斂或混合色溫 → 灰卡校正</td></tr>
+<tr><td>灰卡上 R≠B</td><td>gains 沒調平 → 重做步驟 4</td></tr>
+<tr><td>白色正常但彩色彩偏</td><td>CCM 問題 → 後處理矩陣校正</td></tr>
+<tr><td>特定光源下突然色偏</td><td>AWB 演算法誤判 → 鎖定手動 gains</td></tr>
+<tr><td>色偏只在角落</td><td>LSC 色差 → 回單元 12</td></tr>
+</table>
+<div class="callout warn"><strong>常見錯誤與陷阱：</strong>① 用螢幕/手機當「中性參考」——不是灰卡；② 灰卡沒佔滿中央就量——用 ROI 只取中央；③ 忘了關 auto AWB 就手動設 gains——被覆寫；④ 在不同光源間複用同一組 gains——每光源一組。</div>
+
+<h2>11.11 練習</h2>
+<ol>
+<li>完成灰卡校正 SOP，建立至少兩組色溫的 gains 表。</li>
+<li>對比「開 AWB」與「關 AWB 手動」在同場景的 RGB 統計。</li>
+<li>說明為什麼 CCM 在感測器端可能受限，並列出後處理補 CCM 的做法。</li>
+<li>在混合色溫場景記錄 AWB 誤判的證據（照片 + RGB 值）。</li>
+</ol>
+
+<h2>11.12 深入：後處理 CCM 的矩陣實作</h2>
+<div class="demo-block"><div class="demo-label">OpenCV 套 CCM</div><pre>python3 - <<'EOF'
+import cv2, numpy as np
+img = cv2.imread('shot.png').astype(float)/255.0
+b,g,r = cv2.split(img)                     <span class="hl-c"># BGR 順序</span>
+ccm = np.array([[1.6,-0.4,-0.2],
+                [-0.2,1.4,-0.2],
+                [-0.1,-0.2,1.3]])
+rgb = np.stack([r,g,b],axis=-1) @ ccm.T
+r,g,b = cv2.split(rgb.clip(0,1))
+out = cv2.merge([b,g,r])*255
+cv2.imwrite('shot_ccm.png', out.astype(np.uint8))
+EOF</pre></div>
+<div class="callout warn"><strong>提醒：</strong>CCM 讓顏色「準」但不讓「白」——白平衡先做好，矩陣才有意義。順序：AWB → CCM。</div>
+
+<h2>11.13 回顧練習</h2>
 <ol>
 <li>灰卡校正一組 gains。</li>
 <li>對比「開 AWB」與「關 AWB 手動」的結果。</li>

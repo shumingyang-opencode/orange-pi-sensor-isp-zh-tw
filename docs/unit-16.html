@@ -67,7 +67,61 @@
 □ 調校：黑位 → LSC → AWB/CCM → NR/Sharpen</pre></div>
 <div class="callout warn"><strong>紀律：</strong>一次只換一個變數，保留官方模組當對照組。</div>
 
-<h2>16.5 總複習：寫下你的 SOP</h2>
+<h2>16.6 深入原理：多感測器與 virtual channel</h2>
+<p>多相機不是「多接一顆」那麼簡單——兩顆感測器可能共享同一組 MIPI lanes，靠 <strong>virtual channel（VC）</strong> 區分資料流。</p>
+<table>
+<tr><th>接法</th><th>資料路徑</th><th>Orange Pi 情境</th></tr>
+<tr><td>每顆各自 lanes</td><td>各自的 CSI receiver</td><td>RK3588 多組 receiver</td></tr>
+<tr><td>共享 lanes + VC</td><td>同一 D-PHY 帶 VC 標籤</td><td>需要接收器支援多 VC</td></tr>
+<tr><td>時序多工</td><td>分時切換</td><td>不適合即時雙流</td></tr>
+</table>
+<p>在 media graph 中，每顆感測器是<strong>獨立的 subdev entity</strong>，各自連到（可共享的）CSI 接收器。啟動時要對「每一條管線」分別設定格式與 link，並確認 video 節點一一對應。</p>
+<div class="callout info"><strong>實務重點：</strong>多相機的雷多在「共享資源」——MIPI lane、ISP 頻寬、記憶體頻寬。先算清楚每路解析度/幀率（單元 11 的頻寬公式）再決定能不能同時跑。</div>
+
+<h2>16.7 完整 Worked Example：客製 OV5640 接入的完整流程</h2>
+<div class="demo-block"><div class="demo-label">步驟 1｜硬體確認</div><pre><span class="hl-c"># 確認 CSI lane / I2C bus / reset GPIO / XCLK</span>
+sudo i2cdetect -l
+cat /sys/kernel/debug/gpio | grep -i reset</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜改 DT overlay 並重啟</div><pre><span class="hl-c"># 假設 overlay 新增節點：</span>
+<span class="hl-c"># &i2c3 { ov5640: ov5640@3c { compatible="ovti,ov5640"; reg=&lt;0x3c&gt;;</span>
+<span class="hl-c">#           clocks=&lt;&amp;clk_xclk&gt;; clock-frequency=&lt;24000000&gt;; ... }; };</span>
+sudo dtoverlay overlay-name.dtbo
+sudo reboot</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜probe 驗證</div><pre>dmesg | grep -i -E "ov5640|csi|probe"
+sudo i2cget -y 3 0x3c 0x300a   <span class="hl-c"># 應回 0x56</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 4｜建管線取流</div><pre>media-ctl -d /dev/media0 -r
+media-ctl -d /dev/media0 -l "'ov5640 3-003c':0->'csi2':0[1]"
+v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=UYVY \
+  --stream-mmap=3 --stream-count=1 --stream-to=shot.yuv</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 5｜RAW 品質檢查</div><pre><span class="hl-c"># 蓋鏡頭拍黑幀定黑位；拍灰卡驗 Bayer order 與 LSC（回單元 2/8/12）</span>
+python3 - <<'EOF'
+import numpy as np
+raw = np.fromfile('dark.raw', dtype=np.uint16).reshape(720,1280)
+print('OB =', np.median(raw[600:700,400:880]))
+EOF</pre></div>
+<div class="callout"><strong>完成標準：</strong>五步全過：probe 成功 → 讀到 ID → 取到幀 → RAW 黑位合理 → 可進入調校（黑位→LSC→AWB→NR 各回對應單元）。</div>
+
+<h2>16.8 疑難排解決策樹：客製接入失敗</h2>
+<table>
+<tr><th>節點</th><th>失敗</th><th>方向</th></tr>
+<tr><td>DT</td><td>overlay 沒載入/編譯錯</td><td>dmesg 看 dtoverlay 錯誤、檢查 compatible/reg/clocks</td></tr>
+<tr><td>Probe</td><td>probe failure</td><td>回單元 6：電源/clock/reset/位址</td></tr>
+<tr><td>ID</td><td>讀不到 0x5640</td><td>回單元 3 I2C 決策樹</td></tr>
+<tr><td>出圖</td><td>無資料</td><td>MIPI lane count/VC 設定、格式對齊</td></tr>
+<tr><td>RAW</td><td>Bayer/黑位錯</td><td>回單元 2/8 驗證</td></tr>
+<tr><td>多相機</td><td>第二路沒資料</td><td>檢查 VC/共享資源頻寬（單元 11）</td></tr>
+</table>
+<div class="callout warn"><strong>常見錯誤與陷阱：</strong>① DT 的 <code>clock-frequency</code> 與實際 XCLK 不符——PLL 全錯；② reset GPIO 極性反；③ 兩顆感測器用相同 I2C 位址沒改——衝突；④ 一次改多個變數——保留官方模組當對照組，一次只換一個。</div>
+
+<h2>16.9 練習</h2>
+<ol>
+<li>模擬/實作客製 OV5640 接入五步，產出每一步的證據。</li>
+<li>寫一份「你的 bring-up SOP」（含指令與預期輸出）。</li>
+<li>寫一份「你的調校工作流」（含參數與 log 範本），放進 repo。</li>
+<li>若接第二顆感測器，記錄 VC 設定與頻寬計算。</li>
+</ol>
+
+<h2>16.10 總複習：寫下你的 SOP</h2>
 <ol>
 <li>寫一份「你的 bring-up SOP」。</li>
 <li>寫一份「你的調校流程與參數」。</li>
