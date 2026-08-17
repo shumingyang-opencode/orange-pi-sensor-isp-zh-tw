@@ -117,6 +117,45 @@ sudo i2ctransfer -y 3 w3@0x3c 0x31 0x08 0x01</pre></div>
 </ol>
 
 
+  <h2>3.15 進階真實情境 Worked Example：RK3588 I2C 多 bus 衝突排除</h2>
+<p>場景：Orange Pi 5 Plus 接 OV5640，I2C 掃描在 bus 3 看到 0x3c 但讀 ID 回 0xFF，懷疑 bus 衝突。</p>
+<div class="demo-block"><div class="demo-label">步驟 1｜確認 bus 編號與 pull-up</div><pre>sudo i2cdetect -y 1    <span class="hl-c"># RK3588 的 bus 1 通常掛 CSI0</span>
+sudo i2cdetect -y 3    <span class="hl-c"># bus 3 也可能掛 CSI</span>
+cat /sys/kernel/debug/gpio | grep -i i2c   <span class="hl-c"># 確認 I2C GPIO 腳位</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜量測 SDA/SCL 電位（需示波器）</div><pre><span class="hl-c"># idle 時 SDA/SCL 都應為高電位（>2.8V for 3.3V I2C）</span>
+<span class="hl-c"># 若 SDA 被拉低 → 可能有裝置卡住 bus</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜用 i2cset 嘗試 reset 卡住的裝置</div><pre><span class="hl-c"># 發送 9 個 SCL clock 讓卡住的 SDA 釋放</span>
+sudo i2cset -y 3 0x3c 0x00 0x00   <span class="hl-c"># 若回 ERR → bus 被鎖</span></pre></div>
+<div class="callout"><strong>設計決策：</strong>RK3588 的 I2C 控制器有 6 個 bus，但 DT 可能只啟用部分。若 OV5640 實際接在 bus 3 但 DT 指到 bus 1，probe 會失敗——這是最常見的「看似 I2C 問題但其實是 DT 錯誤」。</div>
+
+<h2>3.16 深入原理擴充：SCCB 與 I2C 的電氣差異</h2>
+<p>OV 感測器的 SCCB 雖然與 I2C 相容，但有一個電氣層面的關鍵差異：</p>
+<table class="reg-table">
+<tr><th>項目</th><th>標準 I2C</th><th>OV SCCB</th></tr>
+<tr><td>SDA hold time</td><td>依速率（100/400kHz）</td><td>感測器端可能更短</td></tr>
+<tr><td>Clock stretching</td><td>支援（裝置可暫停 SCL）</td><td>OV 感測器多不支援</td></tr>
+<tr><td>ACK 檢查</td><td>每個 byte 後 ACK</td><td>有時回 NACK 但仍可讀寫（NDA register）</td></tr>
+</table>
+<p><strong>容易忽略的邊界案例：</strong>當你用 <code>i2ctransfer</code> 寫入 NDA 感測器的 protected register 時，感測器可能回 NACK 但資料實際已寫入。這會讓除錯工具誤判「寫入失敗」——實際上需要用回讀驗證而非依賴 ACK。</p>
+<div class="callout warn"><strong>實務提醒：</strong>在 Orange Pi 的 I2C 驅動中，<code>i2c_transfer</code> 的 return value 可能包含 ACK 狀態——如果你的驅動把 NACK 當 error，可能導致 probe 失敗但硬體其實正常。</div>
+
+<h2>3.17 診斷式疑難排解表</h2>
+<table>
+<tr><th>症狀</th><th>可能原因</th><th>解決方案</th></tr>
+<tr><td><code>i2cdetect</code> 掃到 0x3c 但讀 ID 回 0xFF</td><td>I2C bus pull-up 太弱或 bus 速率過高</td><td>降低 I2C 速率到 100kHz；確認 SDA/SCL pull-up 到 3.3V</td></tr>
+<tr><td><code>i2ctransfer</code> 回 EREMOTEIO</td><td>I2C 控制器硬體錯誤或 DMA 衝突</td><td>重設 I2C 控制器（<code>i2c_adapter</code> unbind/bind）</td></tr>
+<tr><td>讀 ID 正常但寫 register 無效</td><td>RESET 未釋放就寫 register</td><td>確認 reset GPIO 已 high（active-low 時）；等 t_PW_UP 後再寫</td></tr>
+<tr><td>OV5640 位址跳到 0x21</td><td>SCCB_ID 腳被拉高</td><td>查模組 PCB 的 SCCB_ID 腳位；改 DT reg 或接線</td></tr>
+<tr><td>I2C 讀寫速度明顯變慢</td><td>bus 上有其他裝置拉低 clock</td><td>用 <code>i2cdetect</code> 掃全部位址確認只有一顆感測器</td></tr>
+</table>
+
+<h2>3.18 進階挑戰題</h2>
+<ol>
+<li>用 <code>i2ctransfer</code> 寫入 OV5640 的 0x3500（曝光高位），再讀回驗證。故意寫入 0xFF，觀察感測器的反應（是否 NACK、是否保留舊值）。</li>
+<li>在 RK3588 上，同時開兩個 I2C terminal（一個讀 0x300A，一個讀 0x3500），測試 I2C 控制器的併發能力。記錄是否有 bus 衝突。</li>
+<li>設計一支 <code>probe_ov5640.sh</code>，自動判斷 I2C bus 編號（掃全部 bus），讀 ID，並根據 ID 判斷感測器型號，印出「OK/失敗/未知感測器」。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>OV5640 的 I2C 位址與 16-bit register。</li><li>i2cdetect / i2cget / i2ctransfer 實作。</li><li>讀 0x300A/0x300B 驗證。</li><li>OV5640 關鍵 register 群。</li></ul>

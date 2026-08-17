@@ -106,6 +106,39 @@ ls -l frame.yuv   <span class="hl-c"># 1280*720*2 = 1,843,200 bytes</span></pre>
 </ol>
 
 
+  <h2>5.14 進階真實情境 Worked Example：GStreamer 管線除錯——從 fakesink 到實際顯示</h2>
+<p>場景：Orange Pi 5（RK3588）接 OV5640，GStreamer 預覽全白，需要從 fakesink 反向追蹤問題。</p>
+<div class="demo-block"><div class="demo-label">步驟 1｜用 fakesink 確認有資料流動</div><pre>gst-launch-1.0 v4l2src device=/dev/video0 ! 'video/x-raw,format=YUYV,width=1280,height=720' \
+  ! videoconvert ! fakesink silent=false 2>&1 | grep -i "buffer\|error"</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜用 filesink 保存一幀驗證</div><pre>gst-launch-1.0 v4l2src device=/dev/video0 ! 'video/x-raw,format=YUYV,width=1280,height=720' \
+  ! filesink location=frame.gst</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜檢查 caps 是否被接受</div><pre>gst-inspect-1.0 v4l2src | grep -A20 "SINK template"
+gst-launch-1.0 v4l2src device=/dev/video0 ! capsfilter caps='video/x-raw,format=YUYV' ! fakesink -v 2>&1 | head -20</pre></div>
+<div class="callout"><strong>設計決策：</strong>GStreamer 管線中 <code>autovideosink</code> 在無 X11/Wayland 的 SSH 環境會失敗（fails to initialize display），但它不是「沒有畫面」的真正原因。用 fakesink 隔離「資料流動」與「顯示輸出」是標準除錯手法。</div>
+
+<h2>5.15 深入原理擴充：RK3588 MPP 硬體編碼與 V4L2 的串接</h2>
+<p>RK3588 有硬體編碼器（MPP, Media Process Platform），但它不在 V4L2 media graph 內：</p>
+<div class="pipe"><span class="step">V4L2 video device</span><span class="arr">→</span><span class="step">GStreamer v4l2src</span><span class="arr">→</span><span class="step">videoconvert</span><span class="arr">→</span><span class="step">mpph264enc</span><span class="arr">→</span><span class="step">h264parse</span><span class="arr">→</span><span class="step">mp4mux</span></div>
+<p><strong>容易忽略的邊界案例：</strong>RK3588 的 MPP encoder 需要 NV12 輸入，但 OV5640 出 YUYV——中間必須有 <code>videoconvert</code> 做 format 轉換。如果直接把 YUYV 送進 MPP，會靜默失敗（encoder 回傳 0 byte）而非報錯。</p>
+<div class="callout info"><strong>效能影響：</strong><code>videoconvert</code> 在 CPU 上做 format 轉換，會成為瓶頸。RK3588 的 RGA 可以做硬體 YUYV→NV12 轉換，但需要額外設定 <code>rga</code> element。</div>
+
+<h2>5.16 診斷式疑難排解表</h2>
+<table>
+<tr><th>症狀</th><th>可能原因</th><th>解決方案</th></tr>
+<tr><td><code>v4l2-ctl --stream-to</code> 成功但 <code>gst-launch</code> timeout</td><td>GStreamer caps 沒對齊（format/width/height）</td><td>用 <code>capsfilter</code> 明確指定 <code>video/x-raw,format=YUYV,width=1280,height=720</code></td></tr>
+<tr><td>GStreamer fakesink 有 buffer 但 autovideosink 白屏</td><td>顯示後端未初始化（無 X11/Wayland）</td><td>設定 <code>DISPLAY</code> 或 <code>WAYLAND_DISPLAY</code>；或用 <code>ximagesink</code> 替代</td></tr>
+<tr><td><code>media-ctl -V</code> 設定格式後 video device 回 EINVAL</td><td>format 四角不對齊（sensor pad 與 video pad 格式不同）</td><td>用 <code>media-ctl -p</code> 確認 sensor output 與 video input 格式一致</td></tr>
+<tr><td>取到幀但 sizeimage 與預期不同</td><td>bytesperline 對齊導致 padding</td><td>用 <code>v4l2-ctl --get-fmt-video</code> 取實際 sizeimage</td></tr>
+<tr><td>GStreamer 有 frame 但全綠</td><td>format 設成 NV12 但實際是 YUYV</td><td>確認 fourcc：YUYV vs NV12 的 bytes/pixel 不同</td></tr>
+</table>
+
+<h2>5.17 進階挑戰題</h2>
+<ol>
+<li>用 GStreamer 串接 OV5640 → MPP 硬體編碼 → MP4 檔案，測量端到端延遲（從觸發到檔案可播放）。比較「用 videoconvert」與「用 RGA」的延遲差異。</li>
+<li>寫一支 shell script：自動取 10 幀 RAW，統計每幀的平均亮度與 σ，判斷 AEC 是否已收斂。</li>
+<li>在 RK3588 上同時開兩個 <code>v4l2-ctl --stream-mmap</code> 從同一個 video device 取流，觀察是否成功。解釋 V4L2 的 multi-queue 行為。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>用 media-ctl 設定管線連結與格式。</li><li>用 v4l2-ctl 拍照取流。</li><li>用 GStreamer 預覽。</li><li>三種常見失敗的方向。</li></ul>

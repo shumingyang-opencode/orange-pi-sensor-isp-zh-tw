@@ -129,6 +129,45 @@ v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=YUYV \
 </ol>
 
 
+  <h2>6.14 進階真實情境 Worked Example：從 dmesg 追蹤到 PLL 計算錯誤</h2>
+<p>場景：Orange Pi Zero 3（Allwinner H618）接 OV5640，dmesg 有 probe 成功但取流時全黑。從 dmesg 追到 PLL 設定錯誤。</p>
+<div class="demo-block"><div class="demo-label">步驟 1｜抓 dmesg 中的 clock 相關訊息</div><pre>dmesg | grep -i -E "ov5640|clock|pll|xclk|rate"
+<span class="hl-c"># 找到: ov5640 3-003c: xclk (24000000 Hz) ...</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜讀 PLL register 並手算</div><pre>for r in 0x3035 0x3036 0x3106; do
+  h=${r:2:2}; l=${r:4:2}
+  echo -n "$r: "; sudo i2ctransfer -y 3 w2@0x3c 0x$h 0x$l r1
+done</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜對照 datasheet 計算 MIPI clock</div><pre><span class="hl-c"># OV5640 PLL: PLL_multiplier / PLL_prediv / sys_divider</span>
+<span class="hl-c"># 若算出 MIPI clock 超過 D-PHY 上限 → 全黑</span></pre></div>
+<div class="callout"><strong>設計決策：</strong>Allwinner H618 的 CSI 接收器對 MIPI clock 更敏感——RK3588 通常有更寬的容忍範圍。H618 上 PLL 設定稍偏就可能全黑，而 RK3588 可能只是幀率異常。</div>
+
+<h2>6.15 深入原理擴充：Allwinner CIF vs RK3588 ISP3 的上電時序差異</h2>
+<table class="reg-table">
+<tr><th>項目</th><th>Allwinner CIF</th><th>RK3588 ISP3</th></tr>
+<tr><td>上電序列</td><td>AVDD → DOVDD → XCLK → RESET釋放</td><td>AVDD → DOVDD → DVDD → XCLK → RESET釋放</td></tr>
+<tr><td>Clock 啟用</td><td>DT clock-frequency 直接驅動</td><td>需額外設定 <code>clock-output-names</code></td></tr>
+<tr><td>Reset 極性</td><td>通常 active-low</td><td>依 DT <code>reset-gpios</code> 設定</td></tr>
+<tr><td>probe 失敗後重試</td><td>需完整 power cycle</td><td>可 unbind/bind driver</td></tr>
+</table>
+<p><strong>容易忽略的邊界案例：</strong>RK3588 的 ISP3 支援「warm reset」（不重上電就重置感測器），但 Allwinner CIF 不支援——在 H618 上 probe 失敗後，必須完整斷電重來。這在量產環境的自動復位策略中會造成額外停機時間。</p>
+
+<h2>6.16 診斷式疑難排解表</h2>
+<table>
+<tr><th>症狀</th><th>可能原因</th><th>解決方案</th></tr>
+<tr><td>dmesg 有 probe success 但 i2cdetect 沒 0x3c</td><td>probe 時 I2C 通但之後 bus 被其他裝置佔用</td><td>重新掃描 I2C bus；檢查是否有其他驅動佔用同一 bus</td></tr>
+<tr><td>XCLK 有輸出但 frequency 不對</td><td>DT 的 clock-frequency 與實際不符</td><td>用示波器量 XCLK；對齊 DT 設定（OV5640 需 24MHz）</td></tr>
+<tr><td>RESET GPIO 狀態正確但 probe 失敗</td><td>RESET 釋放後未等 t_PW_UP 就下 I2C</td><td>在驅動中加入 delay（OV5640 約需 5ms）</td></tr>
+<tr><td>RK3588 ISP3 probe 成功但取流 EBUSY</td><td>ISP 被其他 process 佔用（如 GStreamer 殘留）</td><td>kill 所有 gst-launch 進程；檢查 <code>fuser /dev/video0</code></td></tr>
+<tr><td>H618 probe 成功但全黑</td><td>PLL 計算錯誤導致 MIPI clock 超限</td><td>讀 PLL register（0x3035/0x3036），對照 datasheet 計算</td></tr>
+</table>
+
+<h2>6.17 進階挑戰題</h2>
+<ol>
+<li>在 Allwinner H618 上模擬「RESET 未釋放」：用 <code>gpio</code> 工具手動拉低 reset GPIO，觀察 i2ctransfer 的回應變化。記錄每種症狀。</li>
+<li>在 RK3588 上，用 <code>media-ctl -p</code> 找出 ISP3 的所有 pad，並手動設定 ISP 輸出格式為 NV12（而非 YUYV）。比較兩者的 <code>sizeimage</code> 差異。</li>
+<li>設計一支 bring-up 自動化腳本：依序檢查電源→clock→I2C→ID→取流，每步回傳 pass/fail，最終產出一份 HTML 報告。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>Bring-up 四件事。</li><li>用 dmesg 追 probe/CSI 錯誤。</li><li>透過 controls 與 i2c 讀 register。</li><li>照決策樹排解。</li></ul>

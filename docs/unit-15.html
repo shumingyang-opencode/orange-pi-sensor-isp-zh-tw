@@ -114,6 +114,43 @@ gst-launch-1.0 nvarguscamerasrc sensor-id=0 ! 'video/x-raw(memory:NVMM)' ! fakes
 </ol>
 
 
+  <h2>15.10 進階真實情境 Worked Example：同一曝光任務的四平台 register 級追蹤</h2>
+<p>場景：在四個平台上分別把 OV5640 曝光鎖在 2000 lines，從使用者 API 追蹤到最終 register 寫入。</p>
+<div class="demo-block"><div class="demo-label">RPi5（libcamera）</div><pre>rpicam-still -o shot.jpg --immediate --shutter 2000
+<span class="hl-c"># libcamera → IPA → I2C → 0x3501=0x07, 0x3502=0xD0</span></pre></div>
+<div class="demo-block"><div class="demo-label">Orange Pi（V4L2）</div><pre>v4l2-ctl -d /dev/v4l-subdev0 -c exposure=2000
+<span class="hl-c"># V4L2 subdev → ov5640 driver → I2C → 0x3501=0x07, 0x3502=0xD0</span></pre></div>
+<div class="demo-block"><div class="demo-label">Orin Nano（Argus）</div><pre><span class="hl-c"># Argus API → sensor_mode.exp_time=2000 → tegracam → I2C</span></pre></div>
+<div class="demo-block"><div class="demo-label">Thor（Holoscan）</div><pre><span class="hl-c"># Holoscan operator → GXF → sensor mode → I2C</span></pre></div>
+<div class="callout"><strong>設計決策：</strong>四平台的 API 差異在抽象層，但最終都寫到同一個感測器 register。這就是「原理可攜、介面不可攜」的具體例證——在 Orange Pi 學到的 register 級知識，搬到任何平台都成立。</div>
+
+<h2>15.11 深入原理擴充：各平台的 I2C bus 編號差異</h2>
+<table class="reg-table">
+<tr><th>平台</th><th>I2C bus（OV5640）</th><th>I2C 位址</th><th>速率</th></tr>
+<tr><td>RPi5</td><td>bus 22（CSI0）</td><td>0x3c</td><td>100kHz</td></tr>
+<tr><td>Orange Pi 5</td><td>bus 3（CSI0）</td><td>0x3c</td><td>100kHz</td></tr>
+<tr><td>Orin Nano</td><td>bus 0（CSI0）</td><td>0x36</td><td>400kHz</td></tr>
+<tr><td>Thor T5000</td><td>bus 0（CSI0）</td><td>0x36</td><td>400kHz</td></tr>
+</table>
+<p><strong>容易忽略的邊界案例：</strong>Orin/Thor 的 OV 感測器位址是 0x36（不是 0x3c），這是因為 NVIDIA 平台的 OV 模組用不同的 address strap。如果你把 Orange Pi 的 i2cget 指令（0x3c）直接在 Orin 上跑，會讀不到 ID——必須先用 <code>i2cdetect</code> 確認實際位址。</p>
+
+<h2>15.12 診斷式疑難排解表</h2>
+<table>
+<tr><th>症狀</th><th>可能原因</th><th>解決方案</th></tr>
+<tr><td>Orange Pi 的 exposure=2000 與 RPi5 的 shutter=2000 結果不同</td><td>單位不同（line vs µs）</td><td>查 OV5640 datasheet：1 line ≈ 29.6 µs（1080p@30fps）</td></tr>
+<tr><td>RPi5 的 awbgains=1.4,1.1 在 Orange Pi 上無效</td><td>OV 用無號整數 gains，RPi 用浮點比值</td><td>Orange Pi 用 red_balance=140（無號整數）</td></tr>
+<tr><td>Orin 上 0x3c 讀不到 ID</td><td>Orin 的 OV 模組位址是 0x36</td><td>改用 i2cdetect 掃 bus 0 找實際位址</td></tr>
+<tr><td>跨平台移植後格式名不同</td><td>fourcc 命名差異</td><td>統一用「位元深 + Bayer order」描述（如 SRGGB10）</td></tr>
+<tr><td>libcamera 的 ExposureTime 設定後 OV5640 不變</td><td>libcamera 需要 IPA 模組且 auto 仍開</td><td>先關 auto exposure，再設 ExposureTime</td></tr>
+</table>
+
+<h2>15.13 進階挑戰題</h2>
+<ol>
+<li>在四平台上各讀 OV5640 的 register 0x3500–0x3503（曝光值），用 Python 組合成 20-bit 值，比較四平台的 I2C 速率差異（量測讀寫時間）。</li>
+<li>設計一個「跨平台曝光轉換表」：把 Orange Pi 的 exposure=2000 lines 換算成 µs，再對照 RPi5 的 shutter 值，驗證一致性。</li>
+<li>在有第二平台的情況下，用同一顆 OV5640 模組分別接兩平台，比較「相同曝光設定」下的實際亮度差異（可能因 ISP 前端處理不同）。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>四平台調校能力差異。</li><li>Orange Pi 定位：底層開放、功能有限。</li><li>各平台工具鏈與門檻。</li><li>依目的選平台。</li></ul>

@@ -144,6 +144,56 @@ EOF</pre></div>
 </ol>
 
 
+  <h2>14.13 進階真實情境 Worked Example：RK3588 ISP3 DOL HDR vs 單幀 Tone Mapping</h2>
+<p>場景：Orange Pi 5 Plus（RK3588）接 OV5640，在高動態範圍場景（窗戶逆光）下比較 DOL HDR 與單幀 + tone mapping 的效果。</p>
+<div class="demo-block"><div class="demo-label">步驟 1｜量測場景動態範圍</div><pre>python3 - <<'EOF'
+import numpy as np
+raw = np.fromfile('scene.raw', dtype=np.uint16).reshape(1080, 1920)
+bright = raw[100:200, 800:1120].mean()   <span class="hl-c"># 窗戶區</span>
+dark   = raw[800:900, 800:1120].mean()   <span class="hl-c"># 室內暗區</span>
+dr_db = 20 * np.log10(bright / max(dark, 1))
+print(f'DR = {dr_db:.1f} dB  (10-bit 上限 ≈ 60 dB)')
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜DOL HDR（若驅動支援）</div><pre><span class="hl-c"># 需要 OV5640 DOL 模式 + RK3588 ISP3 HDR 管線</span>
+media-ctl -d /dev/media0 -V "'rkisp-isp':0[hdr_mode=dol]"
+v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=1 --stream-to=hdr.yuv</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜單幀 + tone mapping</div><pre>python3 - <<'EOF'
+import cv2, numpy as np
+img = cv2.imread('single_frame.png', 0).astype(float)
+<span class="hl-c"># 簡易 tone mapping: 雙曲正切壓縮</span>
+mapped = np.tanh(img / img.max() * 3) / np.tanh(3) * 255
+cv2.imwrite('tonemapped.png', mapped.astype(np.uint8))
+EOF</pre></div>
+<div class="callout"><strong>設計決策：</strong>DOL HDR 動態範圍更高但有 ghost（運動假影）；單幀 tone mapping 無 ghost 但犧牲對比。在靜態場景（如監控）用 HDR；在運動場景（如車載）用 tone mapping。</div>
+
+<h2>14.14 深入原理擴充：RK3588 ISP3 的 Tone Mapping 硬體模組</h2>
+<p>RK3588 ISP3 內建硬體 tone mapping，但它不是「萬能的」：</p>
+<table class="reg-table">
+<tr><th>技術</th><th>硬體支援？</th><th>限制</th></tr>
+<tr><td>單幀 tone mapping</td><td>✅ ISP3 硬體</td><td>曲線固定；無法場景自適應</td></tr>
+<tr><td>DOL HDR</td><td>✅ ISP3 + OV5640 DOL</td><td>需要感測器驅動支援；有 ghost</td></tr>
+<tr><td>Stagger HDR</td><td>❌ OV5640 不支援</td><td>需更高端感測器</td></tr>
+<tr><td>後處理 tone mapping</td><td>⚠️ CPU/GPU</td><td>可自適應；但非即時</td></tr>
+</table>
+<p><strong>容易忽略的邊界案例：</strong>ISP3 的 tone mapping 預設曲線是針對「平均場景」設計的——在極端逆光（如直視太陽）下，它可能把天空完全壓成灰色而失去所有高光細節。後處理 tone mapping 可以用場景自適應曲線（如 Reinhard/ACES）來改善，但需要先量測場景的 histogram。</p>
+
+<h2>14.15 診斷式疑難排解表</h2>
+<table>
+<tr><th>症狀</th><th>可能原因</th><th>解決方案</th></tr>
+<tr><td>HDR 有 ghost（運動物體殘影）</td><td>DOL 多幀合併時物體移動</td><td>改用單幀 + tone mapping；或設 ghost reduction 參數</td></tr>
+<tr><td>ISP3 tone mapping 天空全灰</td><td>預設曲線不適合極端逆光</td><td>後處理用場景自適應曲線（Reinhard/ACES）</td></tr>
+<tr><td>調校順序錯（先 AWB 再 LSC）</td><td>LSC 色差污染白平衡基準</td><td>校正順序：黑位 → LSC → AWB/CCM</td></tr>
+<tr><td>每次改動無法重現</td><td>沒記錄 tuning log</td><td>建立版本管理資料夾，每改動一參數就記錄</td></tr>
+<tr><td>後處理 sharpen 後雜訊暴增</td><td>sharp 強度過高放大雜訊</td><td>先 NR 再 sharpen；降低 sharp 強度</td></tr>
+</table>
+
+<h2>14.16 進階挑戰題</h2>
+<ol>
+<li>在 RK3588 上，量測 DOL HDR 的端到端延遲（從觸發到輸出可播放），與單幀 + tone mapping 比較。找出「什麼延遲閾值以下該用哪個」。</li>
+<li>實作一個 Python 版本的「場景自適應 tone mapping」：先算 histogram，再動態調整曲線。比較與 ISP3 預設曲線的 PSNR 差異。</li>
+<li>設計一個完整的 tuning log 系統（含版本管理、raw 存檔、參數 JSON），寫進你的 team repo 成為標準流程。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>Sharpen/Contrast 後處理調校。</li><li>OV5640 DOL HDR 與驅動現況。</li><li>五步調校工作流。</li><li>「先 RAW 對、再後處理」原則。</li></ul>

@@ -100,6 +100,40 @@ gst-inspect-1.0 2>/dev/null | grep -i -E "videobalance|gamma" | head -3</pre></d
 <li>若你同時有 RK3588 與 H618 板卡，分別列出各自的校正分工表。</li>
 </ol>
 
+  <h2>9.8 進階真實情境 Worked Example：RK3588 ISP3 的 3A 引擎 vs OV5640 內建 3A</h2>
+<p>場景：在 Orange Pi 5 Plus（RK3588）上，比較「感測器端 3A」與「平台 ISP3 3A」在複雜光源下的表現差異。</p>
+<div class="demo-block"><div class="demo-label">步驟 1｜用感測器端 3A（OV5640 內建）</div><pre>v4l2-ctl -d /dev/v4l-subdev0 -c auto_exposure=1 -c auto_n_white_balance=1
+v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=5 --stream-to=sensor_3a_%d.yuv</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜用平台 ISP3 3A（RK3588）</div><pre><span class="hl-c"># 關感測器端 auto，開平台端 3A</span>
+v4l2-ctl -d /dev/v4l-subdev0 -c auto_exposure=0 -c auto_n_white_balance=0
+<span class="hl-c"># 透過 media-ctl 啟用 ISP3 的 3A 管線</span>
+media-ctl -d /dev/media0 -l "'ov5640 3-003c':0->'rkisp-isp':0[1]"
+v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=5 --stream-to=platform_3a_%d.yuv</pre></div>
+<div class="callout"><strong>設計決策：</strong>感測器端 3A 反應快但精準度低（受限 register 空間）；平台 ISP3 3A 有完整統計資訊（histogram、zone-based），精準度高但需要更多 CPU 資源做 tuning。</div>
+
+<h2>2.10 深入原理擴充：RK3588 ISP3 的 zone-based 3A 統計</h2>
+<p>RK3588 ISP3 的 3A 引擎把畫面分成多個 zone（通常是 15×15 或 17×13），每個 zone 獨立統計亮度/色度：</p>
+<div class="pipe"><span class="step">RAW</span><span class="arr">→</span><span class="step">ISP3 zone 統計</span><span class="arr">→</span><span class="step">3A 演算法（AE/AWB/AF）</span><span class="arr">→</span><span class="step">調整曝光/gains/CCM</span></div>
+<p><strong>容易忽略的邊界案例：</strong>ISP3 的 zone 統計是基於 demosaic 前的 RAW 資料，所以 zone 的位置是 Bayer pattern 位置而非像素位置——這意味著 zone 邊界可能落在 Bayer 相位不對齊的位置，導致 zone 統計有微小偏差。這在高對比邊緣（如窗戶框）會造成 AE 收斂抖動。</p>
+<div class="callout info"><strong>調校技巧：</strong>如果 AE 在高對比邊緣抖動，可以增大 zone 數量或調整 zone 權重，讓中央 zone 的影響力大於邊緣。</div>
+
+<h2>9.9 診斷式疑難排解表</h2>
+<table>
+<tr><th>症狀</th><th>可能原因</th><th>解決方案</th></tr>
+<tr><td>感測器端 AWB 在混合色溫下偏色</td><td>OV5640 AWB 只有 gains，無 zone-based 統計</td><td>關感測器 AWB，改平台 ISP3 或後處理做</td></tr>
+<tr><td>RK3588 ISP3 3A 收斂慢</td><td>zone 統計更新率受 DDR 頻寬限制</td><td>降低解析度或 zone 數量；確認 DDR 頻寬 DT 設定</td></tr>
+<tr><td>H618 無法使用 ISP 3A</td><td>CIF 無 3A 引擎</td><td>接受感測器端 3A 或後處理做 3A</td></tr>
+<tr><td>後處理 LSC 在 CPU 上跑太慢</td><td>整張圖逐像素計算</td><td>降解析度、分區塊、用 GPU 加速（OpenCL）</td></tr>
+<tr><td>想用 libcamera 但 Orange Pi 不支援</td><td>libcamera 需要 IPA（Image Processing Algorithm）模組</td><td>改用 V4L2 subdev 直接控制；或移植 libcamera IPA</td></tr>
+</table>
+
+<h2>9.10 進階挑戰題</h2>
+<ol>
+<li>在 RK3588 上，分別用感測器端 3A 與平台 ISP3 3A 拍同一混合色溫場景，量化兩者的色偏（用 Delta E 量測）。</li>
+<li>在 H618 上，設計一個後處理 3A 管線：RAW → zone 統計 → 計算曝光/gains → 套用到下一幀。測量收斂時間。</li>
+<li>比較 RK3588 ISP3 的 15×15 zone 與 17×13 zone 在 AE 收斂速度上的差異，寫出最佳 zone 設定建議。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>四平台校正主力概覽。</li><li>Orange Pi 靠感測器內建。</li><li>限制反而強化感測器理解。</li><li>何時升級到有平台 ISP 的板卡。</li><li>ISP 能力由「硬體+驅動+工具鏈」三層決定。</li><li>用 Worked Example 判斷板卡校正路線。</li></ul>

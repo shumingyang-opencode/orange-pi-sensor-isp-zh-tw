@@ -132,6 +132,49 @@ EOF</pre></div>
 </ol>
 
 
+  <h2>13.14 進階真實情境 Worked Example：RK3588 ISP3 NR vs OpenCV NR 的效能比較</h2>
+<p>場景：Orange Pi 5 Plus（RK3588）接 OV5640，在低光場景下比較 ISP3 硬體 NR 與 OpenCV 後處理 NR 的效果與延遲。</p>
+<div class="demo-block"><div class="demo-label">步驟 1｜ISP3 硬體 NR</div><pre><span class="hl-c"># 啟用 ISP3 的 Bayer denoise 模組</span>
+media-ctl -d /dev/media0 -V "'rkisp-isp':0[nr_strength=128]"
+v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=1 --stream-to=isp_nr.yuv</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜OpenCV 後處理 NR</div><pre>python3 - <<'EOF'
+import cv2, time
+img = cv2.imread('noisy.png')
+t0 = time.time()
+nr = cv2.fastNlMeansDenoisingColored(img, None, 10, 10, 7, 21)
+dt = time.time() - t0
+print(f'OpenCV NR: {dt*1000:.0f}ms for {img.shape[1]}x{img.shape[0]}')
+cv2.imwrite('opencv_nr.png', nr)
+EOF</pre></div>
+<div class="callout"><strong>設計決策：</strong>ISP3 NR 是硬體管線內的即時處理（延遲 <1 frame），但 tuning 參數封閉；OpenCV NR 可精細控制但延遲高（數百 ms）。選擇取決於「即時性需求 vs 降噪品質」。</div>
+
+<h2>13.15 深入原理擴充：OV5640 DPC vs RK3588 ISP3 DPCC</h2>
+<table class="reg-table">
+<tr><th>項目</th><th>OV5640 DPC</th><th>RK3588 ISP3 DPCC</th></tr>
+<tr><td>校正方式</td><td>固定 threshold</td><td>自適應（根據統計動態調）</td></tr>
+<tr><td>支援像素類型</td><td>hot pixel（亮）</td><td>hot + cold pixel（亮+暗）</td></tr>
+<tr><td>校正強度</td><td>有限（register 公開少）</td><td>可調（tuning 工具）</td></tr>
+<tr><td>副作用</td><td>過強會抹掉細節</td><td>過強同樣會模糊</td></tr>
+</table>
+<p><strong>容易忽略的邊界案例：</strong>OV5640 的 DPC 與 ISP 的 NR 是獨立模組，但它們的順序很重要——DPC 必須在 NR 之前做，否則 NR 會把 hot pixel 擴散成亮斑。在 RK3588 上，ISP3 的 DPCC 與 Bayer denoise 也在管線中有固定順序（DPCC → Denoise），但如果你用後處理，必須手動確保這個順序。</p>
+
+<h2>13.16 診斷式疑難排解表</h2>
+<table>
+<tr><th>症狀</th><th>可能原因</th><th>解決方案</th></tr>
+<tr><td>低光場景 SNR 低但拉增益無效</td><td>增益同時放大訊號與雜訊</td><td>補光 + 降增益；或加長曝光（若無 motion blur）</td></tr>
+<tr><td>hot pixel 在 NR 後變成亮斑</td><td>DPC 沒先做，NR 擴散了缺陷像素</td><td>先 DPC（修 hot pixel）再 NR</td></tr>
+<tr><td>長曝光暗部有固定亮點</td><td>dark current 累積</td><td>縮短曝光或降溫（若可能）</td></tr>
+<tr><td>NR 後畫面「塑膠感」</td><td>NR 強度過高</td><td>降低 NR 強度；接受適度雜訊換回細節</td></tr>
+<tr><td>ISP3 NR 效果不如預期</td><td>NR tuning 參數未調整</td><td>用 Rockchip tuning 工具調整 Bayer denoise 參數</td></tr>
+</table>
+
+<h2>13.17 進階挑戰題</h2>
+<ol>
+<li>在 RK3588 上，分別用 ISP3 硬體 NR 與 OpenCV NR 處理同一低光 RAW，比較 PSNR 與處理延遲。寫出「什麼場景該用哪個」的決策建議。</li>
+<li>實作「增益上限自動偵測」腳本：逐級增益取幀，統計暗部 σ，找出 SNR 掉到 30dB 以下的增益值，自動寫入調校文件。</li>
+<li>比較 OV5640 DPC 在「開/關」狀態下，NR 前後的 hot pixel 數量變化，量化 DPC 的重要性。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>四種雜訊來源。</li><li>OV5640 DPC 角色。</li><li>Orange Pi 降噪三策略。</li><li>降噪與細節取捨。</li></ul>

@@ -87,6 +87,47 @@ sudo i2cdetect -l                 <span class="hl-c"># 每個 bus 的編號與�
 <li>畫出你板卡的 media graph 草圖（感測器 → CSI → video），對照 <code>media-ctl -p</code> 輸出。</li>
 </ol>
 
+  <h2>1.9 進階真實情境 Worked Example：RK3588 雙感測器盤點</h2>
+<p>場景：RK3588 板卡（如 Orange Pi 5 Plus）同時接 OV5640 + OV9281（IR），在啟動後快速盤點兩顆感測器的生態位置。</p>
+<div class="demo-block"><div class="demo-label">步驟 1｜確認 SoC 與 media device 數量</div><pre>cat /proc/device-tree/compatible | tr '\0' '\n' | head -1
+ls /dev/media*          <span class="hl-c"># RK3588 可能有多個 media device</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜列出所有 video device 與 subdev</div><pre>v4l2-ctl --list-devices
+ls /dev/v4l-subdev*</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜逐顆掃 I2C 並讀 ID</div><pre>sudo i2cdetect -y 3    <span class="hl-c"># OV5640 應在 0x3c</span>
+sudo i2cdetect -y 4    <span class="hl-c"># OV9281 應在 0x60</span>
+sudo i2cget -y 3 0x3c 0x300a   <span class="hl-c"># → 0x56</span>
+sudo i2cget -y 4 0x60 0x300a   <span class="hl-c"># → 0x92（OV9281 ID）</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 4｜media graph 雙管線確認</div><pre>media-ctl -p -d /dev/media0 2>/dev/null | grep -E "ov5640|ov9281|csi"
+media-ctl -p -d /dev/media1 2>/dev/null | grep -E "ov5640|ov9281|csi"</pre></div>
+<div class="callout"><strong>設計決策：</strong>RK3588 有 4 組 MIPI CSI-2 接收器，可同時接多顆感測器。盤點時要確認每顆的 I2C bus、media device、video node 一一對應——這是多相機系統的基礎架構。</div>
+
+<h2>1.10 深入原理擴充：RK3588 RGA 與 Allwinner CIF 差異</h2>
+<p>Orange Pi 的 ISP 生態有兩條截然不同的硬體路線：</p>
+<table class="reg-table">
+<tr><th>SoC</th><th>影像處理 IP</th><th>關鍵差異</th></tr>
+<tr><td>RK3588</td><td>RGA（Raster Graphic Acceleration）+ ISP3</td><td>RGA 可做即時旋轉/縮放/color space 轉換；ISP3 有完整 3A 管線</td></tr>
+<tr><td>Allwinner H618</td><td>CIF（Camera Interface）</td><td>CIF 只負責接收 MIPI 資料，無獨立 ISP 模組——色彩校正全靠感測器端</td></tr>
+</table>
+<p><strong>容易忽略的邊界案例：</strong>RK3588 的 RGA 模組雖然是硬體加速，但它不在 V4L2 media graph 內——而是透過 <code>/dev/rga</code> 獨立的 IOCTL 介面操作。這意味著你不能用 <code>media-ctl</code> 管理 RGA，必須在 userspace 另外串接。這是在 RK3588 上做即時後處理時最常忽略的架構限制。</p>
+<div class="callout info"><strong>實務影響：</strong>如果你的管線需要「ISP 出 YUV → RGA 旋轉 → 編碼」，這段鏈路不能用 media-ctl 一鍵設定，需要 GStreamer 或自寫程式分段串接。</div>
+
+<h2>1.11 診斷式疑難排解表</h2>
+<table>
+<tr><th>症狀</th><th>可能原因</th><th>解決方案</th></tr>
+<tr><td><code>media-ctl -p</code> 顯示 entity 但 link 全斷</td><td>DT overlay 未啟用 media controller</td><td>確認 boot config 有 <code>media_controller=1</code>，或手動 <code>media-ctl -l</code></td></tr>
+<tr><td>RK3588 多顆感測器但只有一個 <code>/dev/video0</code></td><td>DT 只 probe 一顆；第二顆的 I2C/CLOCK 未設定</td><td>檢查 DT overlay 是否為兩顆感測器都加了 clock-gpios 和 i2c 節點</td></tr>
+<tr><td>Allwinner H618 <code>media-ctl -p</code> 完全空白</td><td>BSP 未啟用 media controller 框架</td><td>改用 <code>v4l2-ctl --list-devices</code> 直接查；H618 多數 BSP 用 legacy V4L2</td></tr>
+<tr><td><code>i2cdetect</code> 掃到多顆相同位址</td><td>多顆感測器共享同一 I2C bus 且未改 address strap</td><td>改其中一顆的 SCCB_ID 腳，或分開到不同 I2C bus</td></tr>
+<tr><td><code>dmesg</code> 有 probe success 但 <code>/dev/video*</code> 不存在</td><td>video device node 未註冊（kernel config 缺 V4L2_VIDEO_DEVICE）</td><td>確認 kernel .config 有 <code>CONFIG_VIDEO_V4L2=y</code> 和 <code>CONFIG_VIDEO_V4L2_SUBDEV_API=y</code></td></tr>
+</table>
+
+<h2>1.12 進階挑戰題</h2>
+<ol>
+<li>在 RK3588 板卡上同時接 OV5640 與 OV9281，手動建立兩條 media pipeline（含 link 與 format），驗證兩路可同時取流。畫出你的 media graph 圖，標註每條路徑的 entity 與 link。</li>
+<li>對比 RK3588 與 Allwinner H618 在「media controller 支援度」上的差異：列出三項可用工具、三項不可用工具，並解釋原因。</li>
+<li>假設你的 DT overlay 誤將 OV5640 的 clock-frequency 設為 12MHz（正確為 24MHz），從 dmesg 到 i2cdetect 到 media-ctl，逐步寫出你會看到什麼症狀、以及如何定位到 clock 錯誤。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>Orange Pi 的 SoC 決定相機能力。</li><li>V4L2 / media controller 管線。</li><li>OV5640 是 Linux 上最常見 OV 感測器。</li><li>先確認板卡 BSP 支援。</li><li>media graph 中 entity/link 的意義。</li><li>用四步 Worked Example 盤點板卡相機生態。</li></ul>

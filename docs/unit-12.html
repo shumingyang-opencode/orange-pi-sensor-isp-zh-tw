@@ -123,6 +123,50 @@ EOF</pre></div>
 <li>在你板卡上記錄「不同解析度的 LSC 是否要分開」。</li>
 </ol>
 
+  <h2>12.12 進階真實情境 Worked Example：RK3588 ISP3 LSC 網格 vs Python 增益圖的品質對比</h2>
+<p>場景：Orange Pi 5 Plus（RK3588）接 OV5640，用 17×13 網格（ISP3）與逐像素增益圖（Python）分別做 LSC，比較角落亮度提升與色差改善。</p>
+<div class="demo-block"><div class="demo-label">步驟 1｜ISP3 網格 LSC（需 Rockchip tuning 工具）</div><pre><span class="hl-c"># 假設已有 tuning 工具設定 17×13 網格</span>
+rkisp_tuning -d /dev/media0 --set-lsc grid_17x13
+v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=1 --stream-to=isp_lsc.yuv</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜Python 逐像素增益圖</div><pre>python3 - <<'EOF'
+import numpy as np, cv2
+raw = np.fromfile('flat.raw', dtype=np.uint16).reshape(720, 1280)
+center = raw[300:420, 500:780].mean()
+gain = center / (raw.astype(float) + 1e-6)
+gain_smooth = cv2.GaussianBlur(gain, (21, 21), 0)  <span class="hl-c"># 平滑避免雜訊放大</span>
+np.save('gain_smooth.npy', gain_smooth)
+EOF</pre></div>
+<div class="callout"><strong>設計決策：</strong>ISP3 網格 LSC 是硬體即時處理（無 CPU 負擔），但網格固定 17×13、tuning 封閉；Python 增益圖可做任意大小且可平滑，但非即時。選擇取決於「即時性需求 vs 調校精準度」。</div>
+
+<h2>12.13 深入原理擴充：Allwinner H618 的 LSC 限制</h2>
+<p>Allwinner H618 的 CIF 完全沒有 LSC 硬體模組，所有 lens shading 校正只能靠後處理：</p>
+<table class="reg-table">
+<tr><th>項目</th><th>Allwinner H618</th><th>RK3588</th></tr>
+<tr><td>LSC 硬體</td><td>❌ 無</td><td>✅ ISP3 網格</td></tr>
+<tr><td>網格大小</td><td>—（後處理任意）</td><td>17×13（固定）</td></tr>
+<tr><td>分通道</td><td>後處理可分 R/Gr/Gb/B</td><td>ISP3 內建分通道</td></tr>
+<tr><td>即時性</td><td>⚠️ CPU 敏感</td><td>✅ 硬體管線</td></tr>
+<tr><td>色差 shading</td><td>後處理可處理</td><td>ISP3 內建</td></tr>
+</table>
+<p><strong>容易忽略的邊界案例：</strong>H618 的 OV5640 雖然有內建 shading 校正（0x4600 帶），但公開的 register 極少、網格極小——不能依賴它做深度校正。在 H618 上，LSC 後處理是唯一的務實路線。</p>
+
+<h2>12.14 診斷式疑難排解表</h2>
+<table>
+<tr><th>症狀</th><th>可能原因</th><th>解決方案</th></tr>
+<tr><td>LSC 後角落仍暗</td><td>亮場不均勻或增益圖沒涵蓋角落</td><td>用更 diffuse 光源（陰天窗邊）重拍亮場</td></tr>
+<tr><td>LSC 後角落偏色</td><td>只用單通道增益做 LSC</td><td>分 R/Gr/Gb/B 各自算增益圖</td></tr>
+<tr><td>增益圖套用後雜訊暴增</td><td>增益圖沒平滑</td><td>用 GaussianBlur 平滑增益圖</td></tr>
+<tr><td>換解析度後 LSC 失效</td><td>LSC 是鏡頭+感測器+解析度 組合特有</td><td>每次換組合都要重新校正</td></tr>
+<tr><td>H618 無法用 ISP LSC</td><td>CIF 無 LSC 硬體</td><td>接受後處理；或升級到 RK3588</td></tr>
+</table>
+
+<h2>12.15 進階挑戰題</h2>
+<ol>
+<li>在 RK3588 上，用 ISP3 17×13 網格 LSC 與 Python 逐像素增益圖各做一次 LSC，用 PSNR 量化兩者的品質差異。</li>
+<li>實作「自適應 LSC」：根據亮場的統計量自動決定增益圖的平滑半徑（σ），在雜訊抑制與校正精度之間取最佳平衡。</li>
+<li>在 H618 上，設計一個即時 LSC 管線：OV5640 出 RAW → Python 做增益圖（blur 後）→ 套用到下一幀。測量端到端延遲。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>lens shading 成因。</li><li>Orange Pi 三條 LSC 路線。</li><li>後處理 LSC 實作。</li><li>LSC 需隨組合重新校正。</li><li>cos⁴ law 與分通道增益的必要性。</li><li>完整後處理 LSC 的 Worked Example。</li></ul>

@@ -129,6 +129,49 @@ EOF</pre></div>
 </ol>
 
 
+  <h2>16.12 進階真實情境 Worked Example：RK3588 多感測器即時切換——OV5640 ↔ OV9281</h2>
+<p>場景：Orange Pi 5 Plus（RK3588）同時接 OV5640（RGB）與 OV9281（IR），設計即時切換管線。</p>
+<div class="demo-block"><div class="demo-label">步驟 1｜確認兩路 video device</div><pre>v4l2-ctl --list-devices | grep -A3 "ov5640\|ov9281"
+ls /dev/video0 /dev/video2   <span class="hl-c"># 假設 0=OV5640, 2=OV9281</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜GStreamer 管線即時切換（用 tee + valve）</div><pre>gst-launch-1.0 \
+  v4l2src device=/dev/video0 name=rgb ! 'video/x-raw,width=1280,height=720' ! tee name=t \
+  v4l2src device=/dev/video2 name=ir  ! 'video/x-raw,width=1280,height=720' ! t. \
+  t. ! queue ! valve drop-bytes=1 ! autovideosink</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜用 v4l2-ctl 手動切換（逐路啟停）</div><pre><span class="hl-c"># 啟 OV5640</span>
+v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=10
+<span class="hl-c"># 停 OV5640，啟 OV9281</span>
+v4l2-ctl -d /dev/video2 --stream-mmap=3 --stream-count=10</pre></div>
+<div class="callout"><strong>設計決策：</strong>RK3588 的兩路 CSI 接收器獨立——可以同時 streaming，也可以逐路啟停。但 GStreamer 的 tee + valve 管線有約 2-3 frame 延遲（queue 緩衝），若需要「零延遲切換」，直接用 v4l2-ctl 逐路操作更可靠。</div>
+
+<h2>16.13 深入原理擴充：OV9281 IR 感測器在 RK3588 的 MIPI 設定陷阱</h2>
+<p>OV9281 是單色 IR 感測器，但在 RK3588 上有一些與 OV5640 不同的 MIPI 設定：</p>
+<table class="reg-table">
+<tr><th>項目</th><th>OV5640</th><th>OV9281</th></tr>
+<tr><td>MIPI lanes</td><td>2 lanes</td><td>1 lane（通常）</td></tr>
+<tr><td>Clock 頻率</td><td>最高 160MHz</td><td>最高 480MHz（但實際用較低）</td></tr>
+<tr><td>格式</td><td>SRGGB10 / YUYV</td><td>Y8 / Y10（無 Bayer）</td></tr>
+<tr><td>Frame rate 上限</td><td>30fps（1080p）</td><td>120fps（720p）</td></tr>
+<tr><td>DT 位址</td><td>0x3c</td><td>0x60</td></tr>
+</table>
+<p><strong>容易忽略的邊界案例：</strong>OV9281 的 MIPI clock 可以跑很高（480MHz），但 RK3588 的 CSI receiver 在 1 lane 模式下可能有 clock 上限——如果你的 DT 設了 480MHz 但硬體只支援 360MHz，會出現 frame sync 失敗（偶發黑幀）而非直接失敗。這需要量測 MIPI clock 來確認。</p>
+
+<h2>16.14 診斷式疑難排解表</h2>
+<table>
+<tr><th>症狀</th><th>可能原因</th><th>解決方案</th></tr>
+<tr><td>OV9281 取流偶發黑幀</td><td>MIPI clock 超 CSI receiver 1-lane 上限</td><td>降低 DT 的 clock-frequency 到 360MHz 以下</td></tr>
+<tr><td>OV5640 + OV9281 同時 streaming 有 frame drop</td><td>DDR 頻寬不足</td><td>降低兩路解析度；確認 DDR DT 設定</td></tr>
+<tr><td>GStreamer tee 切換延遲 >3 frame</td><td>queue 緩衝造成</td><td>減少 queue 的 max-size-buffers</td></tr>
+<tr><td>OV9281 出 Y8 格式但 RK3588 要求 SRGGB</td><td>format 設錯</td><td>OV9281 是單色，應設 greyscale 格式（Y8）</td></tr>
+<tr><td>多感測器 I2C 衝突（同 bus 不同位址）</td><td>address strap 設定相同</td><td>改其中一顆的 SCCB_ID 腳（0x60 vs 0x3c）</td></tr>
+</table>
+
+<h2>16.15 進階挑戰題</h2>
+<ol>
+<li>在 RK3588 上，同時 streaming OV5640（1080p@30fps）+ OV9281（720p@60fps），量測 DDR 頻寬使用率。找出什麼解析度組合會開始掉幀。</li>
+<li>設計一個「感測器健康監控」腳本：每 N 秒自動讀兩路感測器的 ID register、frame count、error count，超標就印警告。</li>
+<li>在 RK3588 上，實作「OV5640 出 RAW → ISP3 做 NR/AWB → RGA 旋轉 90° → MPP 編碼」的完整管線，找出每一級的延遲瓶頸。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>多相機 media 管線。</li><li>客製 OV 接入四步。</li><li>Orange Pi 調校 OV5640 完整案例。</li><li>最佳實踐。</li></ul>

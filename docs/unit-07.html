@@ -102,6 +102,51 @@ done</pre></div>
 <li>比較 OV5640 內建 ISP 與 RK3588 平台 ISP 的 LSC/AWB 校正空間差異。</li>
 </ol>
 
+  <h2>7.9 進階真實情境 Worked Example：RK3588 ISP3 的 LSC 網格 vs 後處理增益圖</h2>
+<p>場景：在 Orange Pi 5 Plus（RK3588）上，用 OV5640 拍均勻亮場，分別用 ISP3 內建 LSC 與後處理 Python 增益圖做 lens shading 校正，比較效果。</p>
+<div class="demo-block"><div class="demo-label">步驟 1｜用 ISP3 做 LSC（透過 Rockchip tuning 工具）</div><pre><span class="hl-c"># 若有 rkisp tuning 工具：</span>
+rkisp_tuning -d /dev/media0 --set-lsc grid_17x13
+<span class="hl-c"># 用 ISP3 出圖</span>
+v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=1 --stream-to=isp_lsc.yuv</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜用後處理做 LSC（Python 增益圖）</div><pre>python3 - <<'EOF'
+import numpy as np
+raw = np.fromfile('flat.raw', dtype=np.uint16).reshape(720, 1280)
+center = raw[300:420, 500:780].mean()
+gain = center / (raw.astype(float) + 1e-6)
+np.save('gain.npy', gain)
+corrected = (raw * gain).clip(0, 1023).astype(np.uint16)
+corrected.tofile('post_lsc.raw')
+EOF</pre></div>
+<div class="callout"><strong>設計決策：</strong>ISP3 的 LSC 是硬體管線內的即時處理（無 CPU 負擔），但網格固定且 tuning 工具封閉；後處理增益圖可在 RAW 上做任意大小網格，但非即時。選擇取決於「即時性需求 vs 調校彈性」。</div>
+
+<h2>7.10 深入原理擴充：RK3588 RGA 的 ISP 後段處理</h2>
+<p>RK3588 的 RGA 可以做 ISP 出圖後的即時處理，但它不在 media graph 內：</p>
+<table class="reg-table">
+<tr><th>功能</th><th>ISP3 做？</th><th>RGA 做？</th><th>後處理做？</th></tr>
+<tr><td>RAW → YUV（demosaic）</td><td>✅ 硬體</td><td>❌ 不做</td><td>⚠️ CPU 慢</td></tr>
+<tr><td>旋轉 90°/270°</td><td>❌ 不做</td><td>✅ 硬體即時</td><td>⚠️ CPU 慢</td></tr>
+<tr><td>縮放</td><td>❌ 不做</td><td>✅ 硬體即時</td><td>⚠️ CPU 慢</td></tr>
+<tr><td>YUV → NV12</td><td>✅ 可設定</td><td>✅ 硬體即時</td><td>⚠️ CPU 慢</td></tr>
+</table>
+<p><strong>容易忽略的邊界案例：</strong>RGA 的旋轉操作會改變圖像的 stride（bytesperline），但不會更新 V4L2 的 format metadata——所以旋轉後的 buffer 必須在 userspace 手動重新計算 layout，否則會出現條紋。</p>
+
+<h2>7.11 診斷式疑難排解表</h2>
+<table>
+<tr><th>症狀</th><th>可能原因</th><th>解決方案</th></tr>
+<tr><td>關 ISP 後出圖仍是 YUV 而非 RAW</td><td>OV5640 的 ISP 開關只影響色彩處理，不切換輸出格式</td><td>用 <code>0x3008</code> 切到 raw output mode；或用 V4L2 format 設 SRGGB10</td></tr>
+<tr><td>RK3588 ISP3 LSC 效果不如後處理</td><td>ISP3 網格太粗或未 tuning</td><td>用 Rockchip tuning 工具調整網格大小；或接受後處理更精準</td></tr>
+<tr><td>OV5640 0x5000 設定後無變化</td><td>需重啟 streaming 才套用</td><td>STREAMOFF → 設定 → STREAMON</td></tr>
+<tr><td>色彩過飽和但 AWB 看起來正常</td><td>CCM 問題（非 AWB）</td><td>用 ColorChecker 量 CCM；後處理補矩陣</td></tr>
+<tr><td>ISP3 出圖延遲明顯</td><td>ISP pipe 塞住或 DDR 頻寬不足</td><td>降低解析度測試；確認 DDR 頻寬 DT 設定</td></tr>
+</table>
+
+<h2>7.12 進階挑戰題</h2>
+<ol>
+<li>在 RK3588 上，用 ISP3 做 LSC + AWB + CCM，再用後處理做同一套校正，比較兩者的 PSNR（峰值信噪比）差異。</li>
+<li>用 <code>0x5000</code> 的 bit 開關逐個開啟/關閉 OV5640 的 ISP 模組（DPC/AWB/CCM），對同一場景取幀，記錄每開關對畫質的量化影響。</li>
+<li>設計一個管線：OV5640 → ISP3 出 NV12 → RGA 旋轉 90° → MPP 編碼。測量端到端延遲，找出瓶頸在哪一段。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>Orange Pi 的 ISP 現實。</li><li>OV5640 內建 AEC/AGC/AWB register 群。</li><li>RK3588 vs H6xx 差異。</li><li>感測器內 ISP 的優點與限制。</li><li>經典 ISP 管線各階段與 register 對應。</li><li>用 ISP 開關實驗驗證管線在哪一段。</li><li>感測器/平台/後處理三層的調校空間對照。</li></ul>

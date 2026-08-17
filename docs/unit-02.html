@@ -100,6 +100,42 @@ EOF</pre></div>
 <li>說明為什麼「先量化成 8-bit 再後處理」會劣化畫質。</li>
 </ol>
 
+  <h2>2.9 進階真實情境 Worked Example：OV9281 IR 感測器的 Bayer 驗證</h2>
+<p>場景：在 Orange Pi 5 Plus（RK3588）上接 OV9281（960p IR 感測器），驗證其 Bayer order 與 OV5640 不同的影響。</p>
+<div class="demo-block"><div class="demo-label">步驟 1｜取 OV9281 RAW（RGGB 8-bit）</div><pre>v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=SRGGB8
+v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=1 --stream-to=ov9281.raw</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜比較 OV5640 與 OV9281 的 RAW 值域</div><pre>python3 - <<'EOF'
+import numpy as np
+raw_9281 = np.fromfile('ov9281.raw', dtype=np.uint8).reshape(720, 1280)
+raw_5640 = np.fromfile('ov5640.raw', dtype=np.uint16).reshape(720, 1280)
+print('OV9281 8-bit max:', raw_9281.max(), '  OV5640 10-bit max:', raw_5640.max())
+print('OV9281 R:', raw_9281[0::2,0::2].mean(), ' B:', raw_9281[1::2,1::2].mean())
+EOF</pre></div>
+<div class="callout"><strong>設計決策：</strong>OV9281 輸出 8-bit 而非 10-bit，動態範圍比 OV5640 少約 12dB。在 IR 場景（低對比）中這會讓暗部雜訊更明顯——這是選擇感測器時必須考慮的 trade-off。</div>
+
+<h2>2.10 深入原理擴充：RK3588 ISP 的 Bayer 處理流程</h2>
+<p>RK3588 的 ISP3 對 RAW 資料的處理與感測器內 ISP 完全不同：</p>
+<div class="pipe"><span class="step">RAW (SRGGB10)</span><span class="arr">→</span><span class="step">BLC（黑位）</span><span class="arr">→</span><span class="step">LSC</span><span class="arr">→</span><span class="step">DPCC（壞點）</span><span class="arr">→</span><span class="step">Bayer Denoise</span><span class="arr">→</span><span class="step">Demosaic</span><span class="arr">→</span><span class="step">AWB</span><span class="arr">→</span><span class="step">CCM</span></div>
+<p><strong>容易忽略的邊界案例：</strong>RK3588 ISP3 在 demosaic 階段支援「自適應邊緣感知」（edge-aware interpolation），但預設值對高紋理場景（如磚牆）容易產生 false color——需要手動調 <code>demosaic_th</code> 參數。這在 Allwinner 平台上完全不存在，因為 CIF 沒有 demosaic 模組。</p>
+<div class="callout info"><strong>為什麼重要：</strong>如果你從 Allwinner 板卡換到 RK3588，不能假設「Bayer order 對了就沒問題」——RK3588 的 demosaic 品質高度依賴 tuning 參數。</div>
+
+<h2>2.11 診斷式疑難排解表</h2>
+<table>
+<tr><th>症狀</th><th>可能原因</th><th>解決方案</th></tr>
+<tr><td>拍灰卡時 Gr ≠ Gb（差距 >5%）</td><td>亮場不均勻或 LSC 未校正</td><td>用更 diffuse 的光源（如陰天窗邊）重拍；或先套 LSC 增益圖再驗證</td></tr>
+<tr><td>10-bit RAW 用 uint8 讀，出現規律條紋</td><td>SRGGB10 與 SRGGB10P 的 packing 不同</td><td>確認 fourcc：SRGGB10 是 16-bit 容器存 10-bit；SRGGB10P 是 packed 連續位元</td></tr>
+<tr><td>換了解析度後 Bayer order 變了</td><td>binning 模式改變了 pixel 排列</td><td>每次換解析度/binning 都要重新驗證 Bayer order</td></tr>
+<tr><td>OV9281 8-bit RAW 暗部全 0</td><td>黑位偏高或曝光不足</td><td>先量測黑位（OB），確認暗部有足夠值域；必要時補光</td></tr>
+<tr><td>RAW 檔案 size 不符預期</td><td>bytesperline 對齊 padding</td><td>用 <code>v4l2-ctl --get-fmt-video</code> 取得實際 bytesperline 與 sizeimage</td></tr>
+</table>
+
+<h2>2.12 進階挑戰題</h2>
+<ol>
+<li>用 OV9281（8-bit）和 OV5640（10-bit）在同一場景各拍一張 RAW，量化兩者的動態範圍差異（用 max-min / σ 比值），寫出結論。</li>
+<li>在 RK3588 上，手動切換 ISP3 的 demosaic 參數，對比高紋理場景（磚牆）的 false color 差異，記錄最佳參數。</li>
+<li>設計一個 Python 腳本，自動從 RAW 檔案推斷 Bayer order（不用假設），方法是分析相鄰像素的互相關。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>感測器光→RAW 流程。</li><li>OV5640 RGGB 與 5MP 規格。</li><li>Rolling/Global 差異。</li><li>OV5640 完整規格與 I2C 位址。</li><li>full well / ADC bit 的意義。</li><li>用 RAW 四通道驗證 Bayer order。</li></ul>

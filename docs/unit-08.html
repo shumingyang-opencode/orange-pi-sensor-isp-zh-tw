@@ -122,6 +122,49 @@ EOF</pre></div>
 <li>在不同解析度各取一幀，驗證 Bayer order 是否一致。</li>
 </ol>
 
+  <h2>8.14 進階真實情境 Worked Example：RK3588 上 SRGGB10 與 SRGGB10P 的差異實測</h2>
+<p>場景：Orange Pi 5 Plus（RK3588）接 OV5640，同一解析度下分別取 SRGGB10（16-bit 容器）與 SRGGB10P（packed），比較兩者的檔案大小與解析品質。</p>
+<div class="demo-block"><div class="demo-label">步驟 1｜分別取兩種格式</div><pre>v4l2-ctl -d /dev/video0 --set-fmt-video=width=1920,height=1080,pixelformat=SRGGB10 \
+  --stream-mmap=3 --stream-count=1 --stream-to=raw10.bin
+v4l2-ctl -d /dev/video0 --set-fmt-video=width=1920,height=1080,pixelformat=SRGGB10P \
+  --stream-mmap=3 --stream-count=1 --stream-to=raw10p.bin</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜比較大小與計算</div><pre>ls -l raw10.bin raw10p.bin
+python3 - <<'EOF'
+import os
+for f in ['raw10.bin', 'raw10p.bin']:
+    sz = os.path.getsize(f)
+    print(f'{f}: {sz} bytes  (理論 SRGGB10={1920*1080*2}  SRGGB10P≈{1920*1080*10//8+1})')
+EOF</pre></div>
+<div class="callout"><strong>設計決策：</strong>SRGGB10P 比 SRGGB10 小約 23%（10/16），但解析需要 bit unpacking——增加 CPU 負擔。若後續做 ISP 或編碼，通常 SRGGB10 的 16-bit 對齊更有效率。</div>
+
+<h2>8.15 深入原理擴充：Allwinner H618 的 MIPI CSI-2 接收器限制</h2>
+<p>Allwinner H618 的 CIF（Camera Interface）與 RK3588 的 MIPI CSI-2 接收器在 RAW 處理上有關鍵差異：</p>
+<table class="reg-table">
+<tr><th>項目</th><th>Allwinner CIF</th><th>RK3588 CSI-2</th></tr>
+<tr><td>支援 RAW packing</td><td>僅 8-bit / 10-bit（無 packed）</td><td>支援 SRGGB10P（packed）</td></tr>
+<tr><td>最大 lane 數</td><td>2 lanes</td><td>4 lanes per receiver</td></tr>
+<tr><td>Virtual channel</td><td>不支援</td><td>支援 VC0-VC3</td></tr>
+<tr><td>Bytesperline 對齊</td><td>通常 16-byte 對齊</td><td>通常 64-byte 對齊</td></tr>
+</table>
+<p><strong>容易忽略的邊界案例：</strong>H618 的 CIF 不支援 SRGGB10P（packed 10-bit），所以在 Allwinner 板卡上只能用 SRGGB10（16-bit 容器）。如果你的 Python 腳本在 RK3588 上用 SRGGB10P 測試通過，搬到 H618 上會直接失敗——format 不被支援。</p>
+
+<h2>8.16 診斷式疑難排解表</h2>
+<table>
+<tr><th>症狀</th><th>可能原因</th><th>解決方案</th></tr>
+<tr><td>RAW 檔案 size 是預期的 2 倍</td><td>用 uint16 讀 8-bit RAW，多讀了一倍</td><td>確認 fourcc 對應的 dtype：SRGGB8=uint8, SRGGB10=uint16</td></tr>
+<tr><td>SRGGB10P 讀出全是 0</td><td>H618 不支援 packed 格式</td><td>改用 SRGGB10（16-bit 容器）</td></tr>
+<tr><td>RAW 四通道均值差距大</td><td>Bayer order 假設錯誤或場景非均勻</td><td>拍灰卡驗證；或用自動推斷腳本</td></tr>
+<tr><td>條紋狀假影</td><td>bytesperline 對齊未處理</td><td>用 <code>--get-fmt-video</code> 的 bytesperline 重組</td></tr>
+<tr><td>NV12 檔案 size 是 YUYV 的 1.5 倍（而非預期）</td><td>sizeimage 含 padding</td><td>以 <code>--get-fmt-video</code> 的 sizeimage 為準</td></tr>
+</table>
+
+<h2>8.17 進階挑戰題</h2>
+<ol>
+<li>在 RK3588 上，用 Python 實作 SRGGB10P 的 bit unpacking，將 packed RAW 轉為 16-bit 容器格式，並比較與直接取 SRGGB10 的時間差異。</li>
+<li>寫一支腳本，自動偵測 <code>ls -l</code> 的檔案大小，推斷是 YUYV、NV12、SRGGB10 還是 SRGGB8，印出格式與解析度。</li>
+<li>在 H618 上，確認 <code>v4l2-ctl --list-formats-ext</code> 不支援 SRGGB10P，然後用 SRGGB10 取一幀，計算實際 bytesperline 與理論值的差異（padding 量）。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>V4L2 fourcc 與 RAW/YUV 路線。</li><li>查感測器支援格式。</li><li>Bayer order 陷阱。</li><li>固定格式/解析度調校。</li><li>RAW packing 與 bytesperline 對齊。</li><li>正確讀取 RAW buffer 的 Worked Example。</li><li>YUV/NV12 布局與 sizeimage 驗證。</li></ul>

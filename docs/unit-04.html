@@ -91,6 +91,46 @@ cat /sys/bus/i2c/devices/3-003c/name               <span class="hl-c"># 感測�
 <li>說明「video 節點」與「subdev 節點」的 API 差別，並各舉一個使用情境。</li>
 </ol>
 
+  <h2>4.9 進階真實情境 Worked Example：從 sysfs 追蹤 subdev 綁定到 DT 節點</h2>
+<p>場景：Orange Pi 5（RK3588）probe 成功但 <code>v4l2-ctl --list-devices</code> 沒出現預期的 video device，需要從 /sys 追蹤驅動綁定鏈。</p>
+<div class="demo-block"><div class="demo-label">步驟 1｜找 DT 節點對應的 sysfs 路徑</div><pre>cat /sys/class/video4linux/video0/name
+readlink -f /sys/class/video4linux/video0/device
+ls -la /sys/bus/platform/devices/*/video4linux/</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜追蹤 I2C subdev 的綁定</div><pre>ls /sys/bus/i2c/devices/
+cat /sys/bus/i2c/devices/3-003c/name   <span class="hl-c"># 應為 "ov5640"</span>
+readlink -f /sys/bus/i2c/devices/3-003c/driver</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜確認 media entity 數量</div><pre>media-ctl -p -d /dev/media0 2>/dev/null | grep "entity"
+<span class="hl-c"># 正常應有 sensor + csi + (isp) + video = 3~5 entities</span></pre></div>
+<div class="callout"><strong>設計決策：</strong>當 <code>v4l2-ctl --list-devices</code> 沒出現 video device 時，問題通常不在驅動本身，而在 DT 的 media controller 設定——RK3588 需要 DT 同時啟用 sensor subdev + CSI receiver + video device 三個 entity。</div>
+
+<h2>4.10 深入原理擴充：RK3588 RGA 在 V4L2 之外的角色</h2>
+<p>RK3588 的 RGA（Raster Graphic Acceleration）是一個常被誤解的模組：</p>
+<table class="reg-table">
+<tr><th>模組</th><th>介面</th><th>media graph 內？</th><th>用途</th></tr>
+<tr><td>ISP3</td><td>V4L2 subdev</td><td>✅ 是</td><td>RAW → YUV 管線</td></tr>
+<tr><td>RGA</td><td><code>/dev/rga</code> IOCTL</td><td>❌ 否</td><td>即時旋轉/縮放/color convert</td></tr>
+<tr><td>CIF</td><td>V4L2 video device</td><td>✅ 是</td><td>Allwinner MIPI 接收</td></tr>
+</table>
+<p><strong>容易忽略的邊界案例：</strong>如果你在 GStreamer 管線中用 <code>rga</code> element，它在底層走的是 <code>/dev/rga</code> 而非 V4L2 media graph——所以 <code>media-ctl -p</code> 看不到 RGA 的設定。若 RGA 的格式與 ISP 輸出不匹配，GStreamer 會靜默失敗而非報錯。</p>
+<div class="callout info"><strong>除錯技巧：</strong>懷疑 RGA 問題時，直接用 <code>rga_test</code>（Rockchip 工具）測試 RGA 是否能正確轉換格式，再回頭查 GStreamer 管線。</div>
+
+<h2>4.11 診斷式疑難排解表</h2>
+<table>
+<tr><th>症狀</th><th>可能原因</th><th>解決方案</th></tr>
+<tr><td><code>media-ctl -p</code> 只有 sensor 沒有 csi/video</td><td>DT 未啟用 CSI receiver 或 video device 節點</td><td>在 DT overlay 中加入 csi2 + video device 節點</td></tr>
+<tr><td><code>--list-ctrls</code> 只有 brightness 沒有 exposure</td><td>驅動未實作 V4L2_CID_EXPOSURE</td><td>查 ov5640.c 的 <code>ov5640_ctrls</code> 陣列確認是否包含</td></tr>
+<tr><td>subdev 有 controls 但設值回 EINVAL</td><td>值超出 min/max/step 範圍</td><td>先 <code>--list-ctrls</code> 看 min/max/step/default</td></tr>
+<tr><td>video device 存在但 <code>media-ctl -p</code> 無 video entity</td><td>media controller 與 V4L2 device 未綁定</td><td>確認 DT 中 video device 節點有 <code>ports</code> 和 <code>port/endpoint</code></td></tr>
+<tr><td>RK3588 ISP node 存在但 <code>media-ctl -l</code> 失敗</td><td>ISP subdev 未 probe 或 lane 數不符</td><td>dmesg 搜 rkisp 確認 probe；檢查 CSI lane 數 DT 設定</td></tr>
+</table>
+
+<h2>4.12 進階挑戰題</h2>
+<ol>
+<li>在 RK3588 上畫出完整的 media graph 圖（手繪或 SVG），標註每個 entity 的 type、pad 數量、與 link 方向。對照 <code>media-ctl -p</code> 的輸出。</li>
+<li>用 <code>/sys/class/video4linux/</code> 的資訊，寫一支 script 自動產出「video device → DT 節點 → 驅動」的對照表。</li>
+<li>測試 <code>v4l2-ctl -d /dev/v4l-subdev0</code> 與 <code>v4l2-ctl -d /dev/video0</code> 對同一個 control（如 exposure）的差異，解釋為什麼 API 不同。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>V4L2 subdev 與 media 管線。</li><li>ov5640.c 是 Linux 驅動範本。</li><li>V4L2 controls 是 register 的抽象。</li><li>media-ctl/v4l2-ctl 查管線與 controls。</li><li>subdev 生命週期回呼與硬體狀態對應。</li><li>節點與管線對不上的排解方向。</li></ul>

@@ -126,6 +126,62 @@ EOF</pre></div>
 </ol>
 
 
+  <h2>11.14 進階真實情境 Worked Example：混合色溫場景下的 AWB 分層策略</h2>
+<p>場景：Orange Pi 5 接 OV5640，在室內日光燈 + 窗邊日光的混合色溫場景下，AWB 嚴重偏色。需要用分層策略校正。</p>
+<div class="demo-block"><div class="demo-label">步驟 1｜拍混合色溫場景</div><pre>v4l2-ctl -d /dev/v4l-subdev0 -c auto_exposure=0 -c exposure=2000
+v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=YUYV \
+  --stream-mmap=3 --stream-count=1 --stream-to=mixed.yuv</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜分區域量測 RGB</div><pre>python3 - <<'EOF'
+import numpy as np
+yuv = np.fromfile('mixed.yuv', dtype=np.uint8).reshape(720,1280,2)
+<span class="hl-c"># 假設 left=日光燈區, right=窗邊日光區</span>
+left_roi  = yuv[:, 0:640, :]    <span class="hl-c"># 日光燈偏綠</span>
+right_roi = yuv[:, 640:1280, :] <span class="hl-c"># 日光偏暖</span>
+print('左區 Y mean:', left_roi[...,0].mean())
+print('右區 Y mean:', right_roi[...,0].mean())
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">步驟 3｜用後處理 CCM 分別校正兩區</div><pre>python3 - <<'EOF'
+import cv2, numpy as np
+img = cv2.imread('mixed.png').astype(float)/255.0
+<span class="hl-c"># 左半用冷色 CCM，右半用暖色 CCM</span>
+ccm_cool = np.array([[1.2,-0.1,-0.1],[-0.1,1.1,-0.0],[-0.1,-0.1,1.2]])
+ccm_warm = np.array([[1.0,-0.2,0.2],[0.0,1.0,0.0],[0.0,-0.1,1.1]])
+h, w = img.shape[:2]
+left  = img[:, :w//2] @ ccm_cool.T
+right = img[:, w//2:] @ ccm_warm.T
+out = np.clip(np.concatenate([left, right], axis=1), 0, 1) * 255
+cv2.imwrite('mixed_ccm.png', out.astype(np.uint8))
+EOF</pre></div>
+<div class="callout"><strong>設計決策：</strong>感測器端 AWB 只能給一組全局 gains，無法處理混合色溫。後處理可分區域套不同 CCM，但非即時。RK3588 的 ISP3 有 zone-based AWB，可部分緩解但仍有極限。</div>
+
+<h2>11.15 深入原理擴充：RK3588 ISP3 的 AWB 演算法 vs OV5640 內建 AWB</h2>
+<table class="reg-table">
+<tr><th>項目</th><th>OV5640 內建 AWB</th><th>RK3588 ISP3 AWB</th></tr>
+<tr><td>zone 數</td><td>1（全局）</td><td>15×15 或 17×13</td></tr>
+<tr><td>色溫範圍</td><td>固定（2800K–6500K）</td><td>可調（依 tuning）</td></tr>
+<tr><td>混合色溫處理</td><td>❌ 無法</td><td>⚠️ zone-based 可部分處理</td></tr>
+<tr><td>gains 精度</td><td>8-bit（0–255）</td><td>12-bit（更高精度）</td></tr>
+<tr><td>CCM 支援</td><td>固定矩陣（不公開）</td><td>可調 3×3 + 分色溫</td></tr>
+</table>
+<p><strong>容易忽略的邊界案例：</strong>OV5640 的 AWB gains 是 R/G 和 B/G 的比值，而不是 R/B 的絕對值——所以「red_balance=140」在不同 OV 感測器上可能代表不同的絕對色彩。跨感測器比較時必須用色溫 K 值而非 gains 值。</p>
+
+<h2>11.16 診斷式疑難排解表</h2>
+<table>
+<tr><th>症狀</th><th>可能原因</th><th>解決方案</th></tr>
+<tr><td>灰卡校正後在另一光源仍偏色</td><td>每光源需一組 gains；不能複用</td><td>為每種光源各做一次灰卡校正，建立查表</td></tr>
+<tr><td>AWB gains 設定後被覆寫</td><td>auto AWB 仍在跑</td><td>先關 auto_n_white_balance=0</td></tr>
+<tr><td>CCM 後白色仍偏色</td><td>AWB 未先做好，CCM 無法補白平衡</td><td>順序：AWB → CCM</td></tr>
+<tr><td>混合色溫場景 AWB 抖動</td><td>zone-based AWB 在邊緣震盪</td><td>增 zone 數量或調整 zone 權重</td></tr>
+<tr><td>OV5640 red_balance 設 128 但偏紅</td><td>128 不是中性值（因 OV 的 gains 定義）</td><td>用灰卡實測中性值，非假設 128</td></tr>
+</table>
+
+<h2>11.17 進階挑戰題</h2>
+<ol>
+<li>在混合色溫場景下，用後處理實作 zone-based AWB：把畫面分成 4×4 zone，每個 zone 獨立算 gains，再混合。比較與全局 AWB 的色偏差異。</li>
+<li>建立一個「色溫 → gains」查表：在 5 種不同光源（日光燈/白熾燈/LED/陰天/黃昏）各做一次灰卡校正，記錄 gains，寫成 CSV。</li>
+<li>在 RK3588 上，用 ISP3 的 zone-based AWB 與 OV5640 內建 AWB 分別拍混合色溫場景，量化兩者的 Delta E 差異。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>AWB 原理與 gains。</li><li>OV5640 AWB 與 V4L2 控制。</li><li>灰卡校正流程。</li><li>混合色溫的局限與分層策略。</li></ul>

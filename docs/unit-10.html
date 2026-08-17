@@ -106,6 +106,48 @@ done</pre></div>
 </ol>
 
 
+  <h2>10.13 進階真實情境 Worked Example：OV5640 在 RK3588 上的曝光時間預算計算</h2>
+<p>場景：Orange Pi 5 Plus（RK3588）接 OV5640，設定 30fps，計算最大可用曝光時間與 frame rate 的 trade-off。</p>
+<div class="demo-block"><div class="demo-label">步驟 1｜確認 frame rate 與 row 週期</div><pre><span class="hl-c"># OV5640 30fps, 1080p: 1125 lines/frame (含 blanking)</span>
+<span class="hl-c"># row 週期 = 1/30/1125 ≈ 29.6 µs/line</span>
+<span class="hl-c"># 最大曝光 ≈ 1125 lines (但會降到 ~15fps)</span></pre></div>
+<div class="demo-block"><div class="demo-label">步驟 2｜設定不同曝光值並量測實際 frame rate</div><pre>v4l2-ctl -d /dev/v4l-subdev0 -c auto_exposure=0
+for e in 500 1000 2000 4000 8000; do
+  v4l2-ctl -d /dev/v4l-subdev0 -c exposure=$e
+  v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=30 --stream-to=exp${e}.yuv
+  echo "exposure=$e fps=$(ls -l exp${e}.yuv | awk '{print $5}')"
+done</pre></div>
+<div class="callout"><strong>設計決策：</strong>OV5640 的曝光時間與 frame rate 共享時間預算——曝光越長，可用 frame rate 越低。在需要固定 frame rate 的應用（如影像分析），必須計算「最大曝光上限」，超過就要改用增益補。</div>
+
+<h2>10.14 深入原理擴充：OV5640 曝光 register 的位元組序陷阱</h2>
+<p>OV5640 的曝光值由 0x3500–0x3503 四個 byte 組合，但位元組序容易搞錯：</p>
+<table class="reg-table">
+<tr><th>Register</th><th>欄位</th><th>位元組序</th></tr>
+<tr><td class="reg">0x3500</td><td>exposure[19:16]</td><td>最高 byte（先送）</td></tr>
+<tr><td class="reg">0x3501</td><td>exposure[15:8]</td><td>中 high</td></tr>
+<tr><td class="reg">0x3502</td><td>exposure[7:0]</td><td>中 low</td></tr>
+<tr><td class="reg">0x3503</td><td>exposure[3:0] + 控制位元</td><td>最低 byte（後送）</td></tr>
+</table>
+<p><strong>容易忽略的邊界案例：</strong>OV5640 的曝光值是 20-bit（不是 16-bit），最高 4 個 bit 在 0x3500 的 bit[3:0]。如果你只讀 0x3501/0x3502（16-bit），會漏掉最高位元——在長曝光場景下曝光值被截斷到 65535 lines，實際應該是 1048575 lines（20-bit）。</p>
+<div class="callout warn"><strong>除錯陷阱：</strong>如果你用 <code>i2ctransfer</code> 只讀 0x3501/0x3502 來判斷曝光值，在長曝光時會看到「曝光設定 8000 但讀回只有 65535」的假象——實際是 20-bit 被截斷。</div>
+
+<h2>10.15 診斷式疑難排解表</h2>
+<table>
+<tr><th>症狀</th><th>可能原因</th><th>解決方案</th></tr>
+<tr><td>設定 exposure=8000 但讀回 65535</td><td>只讀了 16-bit（0x3501/0x3502），漏掉 20-bit 高位</td><td>讀全部四個 byte（0x3500–0x3503）組合成 20-bit 值</td></tr>
+<tr><td>日光燈下曝光設 10ms 仍有 banding</td><td>10ms 是 50Hz 倍數但 OV5640 的 banding filter 未啟用</td><td>設 0x3013[7]=1 啟用 banding filter；或用 8.3ms（60Hz）</td></tr>
+<tr><td>AEC 收斂後曝光跳動</td><td>AEC 演算法在兩種曝光/增益組合間震盪</td><td>設 AEC 收斂速度（0x350E）或鎖定增益只調曝光</td></tr>
+<tr><td>低光場景拉增益後雜訊暴增</td><td>類比增益超過安全上限</td><td>先算 SNR 預算（單元 13），設增益上限</td></tr>
+<tr><td>曝光設為 0 但畫面仍亮</td><td>AEC 沒關或數位增益在補</td><td>確認 auto_exposure=0 且 auto_gain=0</td></tr>
+</table>
+
+<h2>10.16 進階挑戰題</h2>
+<ol>
+<li>計算 OV5640 在 1080p@30fps 下的「曝光時間 vs frame rate」曲線，畫出圖表並找出最佳工作點。</li>
+<li>實作一個 20-bit 曝光讀寫腳本（處理 0x3500–0x3503 的位元組序），驗證與 V4L2 <code>exposure</code> control 的一致性。</li>
+<li>在日光燈下，找出 OV5640 在 50Hz 與 60Hz 電源下「不 banding」的曝光值區間，並解釋為什麼 banding filter 在某些值無效。</li>
+</ol>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>曝光三要素與 register。</li><li>V4L2 controls 控制曝光。</li><li>AEC 收斂與上下限。</li><li>「補光 vs 硬調」取捨。</li></ul>
