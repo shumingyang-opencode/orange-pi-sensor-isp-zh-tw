@@ -165,6 +165,62 @@ EOF</pre></div>
 <li>在 H618 上，確認 <code>v4l2-ctl --list-formats-ext</code> 不支援 SRGGB10P，然後用 SRGGB10 取一幀，計算實際 bytesperline 與理論值的差異（padding 量）。</li>
 </ol>
 
+  <h2>8.18 專案級 Worked Example：RAW 採集與格式自動驗證專案</h2>
+<p>把單元 8 的格式知識做成<strong>自動化 RAW 採集與驗證專案</strong>：自動抓取所有支援的 fourcc，驗證大小、bytesperline、Bayer order 一致性，產出一份「格式能力表」。這是後續所有調校與跨模式比較的基礎設施。</p>
+<div class="demo-block"><div class="demo-label">階段 1｜列全部支援格式</div><pre>v4l2-ctl -d /dev/video0 --list-formats-ext</pre></div>
+<div class="demo-block"><div class="demo-label">階段 2｜逐格式採集與驗證</div><pre>#!/bin/bash
+for fmt in SRGGB8 SRGGB10 SRGGB10P YUYV NV12; do
+  v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=$fmt \
+    --stream-mmap=3 --stream-count=1 --stream-to=fmt_$fmt.bin 2>/dev/null \
+    && echo "$fmt 成功: $(stat -c%s fmt_$fmt.bin) bytes" \
+    || echo "$fmt 不支援"
+done</pre></div>
+<div class="demo-block"><div class="demo-label">階段 3｜驗證 bytesperline 對齊</div><pre>v4l2-ctl -d /dev/video0 --get-fmt-video
+python3 - <<'EOF'
+import os
+for fmt in ['SRGGB8','SRGGB10','YUYV','NV12']:
+    f=f'fmt_{fmt}.bin'
+    if os.path.exists(f):
+        print(fmt, 'actual =', os.path.getsize(f), '理論(1280x720) =', {'SRGGB8':1280*720,'SRGGB10':1280*720*2,'YUYV':1280*720*2,'NV12':1280*720*3//2}[fmt])
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">階段 4｜產出格式能力表</div><pre><span class="hl-c"># 輸出格式：</span>
+<span class="hl-c"># 格式      支援    sizeimage     bytesperline    Bayer order</span>
+<span class="hl-c"># SRGGB10   ✅     1,843,200     2560           RGGB（驗證）</span>
+<span class="hl-c"># SRGGB10P  ❌     —             —              —（H618 不支援）</span>
+<span class="hl-c"># YUYV      ✅     1,843,200     2560           —</span>
+<span class="hl-c"># NV12      ✅     1,382,400     1280           —</span></pre></div>
+<div class="callout"><strong>專案完成標準：</strong>你有一支 <code>format_capture.sh</code> 可一鍵產出「格式能力表」。這張表是跨平台移植（單元 15）與調校 SOP 的第一份參考文件。</div>
+
+<h2>8.19 量測/驗證 SOP：RAW 正確性驗收</h2>
+<table>
+<tr><th>步驟</th><th>作法</th><th>通過判據</th></tr>
+<tr><td>1. sizeimage 驗證</td><td>比對檔案大小與理論值</td><td>匹配（含 padding 判斷）</td></tr>
+<tr><td>2. bytesperline 重組</td><td>用 get-fmt 的 bytesperline 讀取</td><td>影像不斜不鋸齒</td></tr>
+<tr><td>3. Bayer order 驗證</td><td>拍純色卡看四通道</td><td>RGGB 對應正確</td></tr>
+<tr><td>4. 位元深驗證</td><td>亮場峰值對照位元深</td><td>10-bit → 峰值近 1023</td></tr>
+<tr><td>5. packing 驗證</td><td>SRGGB10 vs 10P 檔案大小</td><td>10P 約為 10 的 5/8</td></tr>
+</table>
+<div class="callout warn"><strong>SOP 紀律：</strong>「格式能取」≠「格式正確」。每次採集都跑一遍五步驗證，尤其換解析度 / 換模式後——binning 可能改變 Bayer order 與 padding。</div>
+
+<h2>8.20 平台間對照：RAW 格式</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th></tr>
+<tr><td>常見 RAW 輸出</td><td>SRGGB10（16-bit 容器）</td><td>RPi RAW（SBGGR10）</td><td>RAW10（packed）</td><td>RAW10/12</td></tr>
+<tr><td>打包格式</td><td>支援 10P / 不支援依 SoC</td><td>依 libcamera raw</td><td>packed 為主</td><td>packed 為主</td></tr>
+<tr><td>bytesperline 對齊</td><td>16/64 byte</td><td>16 byte 常見</td><td>NVIDIA 對齊</td><td>NVIDIA 對齊</td></tr>
+<tr><td>取 RAW 方式</td><td>v4l2-ctl pixelformat</td><td>rpicam --raw</td><td>argus / nvgstcapture</td><td>Holoscan capture</td></tr>
+<tr><td>格式工具</td><td>V4L2 fourcc（標準）</td><td>libcamera 描述</td><td>NVIDIA 專屬</td><td>NVIDIA 專屬</td></tr>
+</table>
+<div class="callout info"><strong>核心領悟：</strong>四平台的 RAW 本質相同（Bayer + 位元深），差別在「打包方式與工具名」。用「位元深 + Bayer order」描述格式（如 SRGGB10）是跨平台唯一的共同語言。</div>
+
+<h2>8.21 互動式檢核清單：本單元進階驗收</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 我能跑 format_capture.sh 產出格式能力表。
+- [ ] 我能用 bytesperline 正確重組 RAW 而不斜圖。
+- [ ] 我能區分 SRGGB10 與 SRGGB10P 的檔案大小差異。
+- [ ] 我明白 YUYV / NV12 / RAW 的 sizeimage 計算。
+- [ ] 我已驗證本平台在主要解析度的 Bayer order 一致性。
+- [ ] 我能用「位元深 + Bayer order」描述任何平台的 RAW 格式。</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>V4L2 fourcc 與 RAW/YUV 路線。</li><li>查感測器支援格式。</li><li>Bayer order 陷阱。</li><li>固定格式/解析度調校。</li><li>RAW packing 與 bytesperline 對齊。</li><li>正確讀取 RAW buffer 的 Worked Example。</li><li>YUV/NV12 布局與 sizeimage 驗證。</li></ul>

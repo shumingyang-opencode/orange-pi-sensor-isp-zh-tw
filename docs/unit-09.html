@@ -134,6 +134,60 @@ v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=5 --stream-to=platform_3a
 <li>比較 RK3588 ISP3 的 15×15 zone 與 17×13 zone 在 AE 收斂速度上的差異，寫出最佳 zone 設定建議。</li>
 </ol>
 
+  <h2>9.11 專案級 Worked Example：多平台校正架構評估專案</h2>
+<p>把單元 9 的架構知識做成<strong>選型評估專案</strong>：針對你的實際應用（解析度、幀率、即時性、成本），評估 Orange Pi（RK3588 / H618）是否夠用，或需升級到 RPi5 / NVIDIA。產出一份有數據支撐的選型文件。</p>
+<div class="demo-block"><div class="demo-label">階段 1｜定義應用需求</div><pre><span class="hl-c"># 例：智能門鈴：1080p@30fps，日夜兩模式，電池供電，成本敏感</span>
+<span class="hl-c"># 需求清單：解析度/幀率/即時性/低光表現/功耗/成本</span></pre></div>
+<div class="demo-block"><div class="demo-label">階段 2｜量測本平台能力（單元 1/9）</div><pre>media-ctl -p -d /dev/media0 | grep -iE "isp|cif"
+v4l2-ctl -d /dev/v4l-subdev0 --list-ctrls | wc -l
+v4l2-ctl -d /dev/video0 --list-formats-ext | grep -iE "1920|1280" | head</pre></div>
+<div class="demo-block"><div class="demo-label">階段 3｜驗證關鍵場景表現</div><pre><span class="hl-c"># 低光測試：固定場景，比較感測器端 3A vs 後處理補償（單元 13）</span>
+python3 - <<'EOF'
+import numpy as np
+for g in [64, 256, 1024]:
+    raw = np.fromfile(f'lowlight_g{g}.raw', dtype=np.uint16).reshape(720,1280)
+    roi = raw[300:420,500:780].astype(float)
+    snr = 20*np.log10(roi.mean()/max(roi.std(),1e-6))
+    print(f'gain={g}: SNR={snr:.1f} dB  → {"達標" if snr>=30 else "不達標"}')
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">階段 4｜產出選型結論</div><pre><span class="hl-c"># 範例結論：</span>
+<span class="hl-c"># 需求            Orange Pi(H618)   Orange Pi(RK3588)  RPi5/NVIDIA</span>
+<span class="hl-c"># 1080p@30fps     ✅                ✅                ✅</span>
+<span class="hl-c"># 低光 SNR≥30dB   ❌(需補光)        ⚠️                 ✅</span>
+<span class="hl-c"># 即時深度校正    ❌                ⚠️(工具封閉)       ✅</span>
+<span class="hl-c"># 成本            ✅ 最低           ✅                ❌ 較高</span></pre></div>
+<div class="callout"><strong>專案完成標準：</strong>你有一份「選型評估報告」，用實測數據回答「這片板卡能不能滿足我的應用」。評估邏輯（需求 → 量測 → 判定）比結論本身更重要——它可以在任何平台重複使用。</div>
+
+<h2>9.12 量測/驗證 SOP：三層校正能力評估</h2>
+<table>
+<tr><th>層級</th><th>量測方式</th><th>通過判據</th></tr>
+<tr><td>1. 感測器端</td><td><code>--list-ctrls</code> 統計 controls 數量與種類</td><td>有 exposure/gain/white_balance</td></tr>
+<tr><td>2. 平台 ISP</td><td><code>media-ctl -p</code> 找 isp/cif entity</td><td>確認存在與否（RK3588 vs H618）</td></tr>
+<tr><td>3. 後處理</td><td>量 LSC/NR 延遲（OpenCV）</td><td>記錄延遲供即時性判斷</td></tr>
+<tr><td>4. 端到端</td><td>同一低光場景，三層分別最佳化</td><td>比較 SNR 與延遲，選最務實組合</td></tr>
+</table>
+<div class="callout warn"><strong>SOP 紀律：</strong>架構評估的陷阱是把「感測器內 ISP」當成「平台 ISP」——兩者的校正空間天差地別。先確認平台到底有沒有 ISP，再決定校正策略。</div>
+
+<h2>9.13 平台間對照：ISP 架構</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th></tr>
+<tr><td>校正主力</td><td>感測器內建為主</td><td>SoC 硬體 ISP</td><td>NVIDIA ISP</td><td>NVIDIA ISP（新）</td></tr>
+<tr><td>3A</td><td>感測器 AEC/AWB</td><td>libcamera IPA（開源）</td><td>NVIDIA 3A（封閉）</td><td>NVIDIA 3A（封閉）</td></tr>
+<tr><td>校正深度</td><td>低–中（依 SoC）</td><td>高</td><td>高</td><td>高</td></tr>
+<tr><td>工具鏈</td><td>V4L2 + 後處理</td><td>libcamera + tuning</td><td>NVIDIA 工具（簽約）</td><td>Holoscan（新）</td></tr>
+<tr><td>開放性</td><td>最高</td><td>開源</td><td>封閉</td><td>封閉</td></tr>
+<tr><td>最適合</td><td>學習/原型</td><td>開源產品</td><td>量產畫質</td><td>多機/雲端</td></tr>
+</table>
+<div class="callout info"><strong>核心領悟：</strong>架構選擇的三分法——要「理解底層」選 Orange Pi（H618），要「開源可改」選 RPi5，要「封閉但強」選 NVIDIA。沒有「最好」，只有「最符合你的目標」。</div>
+
+<h2>9.14 互動式檢核清單：本單元進階驗收</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 我能完成選型評估專案並產出有數據的報告。
+- [ ] 我能填出本平台的三層校正能力表。
+- [ ] 我理解「感測器端 3A vs 平台 3A」的精度差異。
+- [ ] 我能解釋 ISP 能力由「硬體 + 驅動 + 工具鏈」三層決定。
+- [ ] 我已比較 RK3588 與 H618 的校正路線差異。
+- [ ] 我能說出「什麼需求該選什麼平台」的判準。</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>四平台校正主力概覽。</li><li>Orange Pi 靠感測器內建。</li><li>限制反而強化感測器理解。</li><li>何時升級到有平台 ISP 的板卡。</li><li>ISP 能力由「硬體+驅動+工具鏈」三層決定。</li><li>用 Worked Example 判斷板卡校正路線。</li></ul>

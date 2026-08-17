@@ -167,6 +167,78 @@ EOF</pre></div>
 <li>在 H618 上，設計一個即時 LSC 管線：OV5640 出 RAW → Python 做增益圖（blur 後）→ 套用到下一幀。測量端到端延遲。</li>
 </ol>
 
+  <h2>12.16 專案級 Worked Example：多鏡頭 LSC 校正資料庫專案</h2>
+<p>把單元 12 的 LSC 知識做成<strong>多鏡頭校正資料庫專案</strong>：為每支鏡頭（模組）建立專屬的 LSC 增益圖，並產出「鏡頭 → 增益圖」的對照管理。這是量產一致性的關鍵——每支鏡頭的光學特性都不完全一樣。</p>
+<div class="demo-block"><div class="demo-label">階段 1｜定義鏡頭清單與命名</div><pre><span class="hl-c"># lens_A（廣角）、lens_B（標準）、lens_C（窄角）</span>
+mkdir -p lsc_db && cd lsc_db</pre></div>
+<div class="demo-block"><div class="demo-label">階段 2｜逐鏡頭拍亮場（單元 12.9）</div><pre>#!/bin/bash
+for lens in A B C; do
+  <span class="hl-c"># 換上 lens_$lens，固定曝光拍均勻亮場</span>
+  v4l2-ctl -d /dev/video0 --set-fmt-video=pixelformat=SRGGB10 \
+    --stream-mmap=3 --stream-count=1 --stream-to=flat_$lens.raw
+done</pre></div>
+<div class="demo-block"><div class="demo-label">階段 3｜逐鏡頭算增益圖</div><pre>python3 - <<'EOF'
+import numpy as np, cv2
+for lens in 'ABC':
+    raw = np.fromfile(f'flat_{lens}.raw', dtype=np.uint16).reshape(720,1280)
+    for name, sl in {'R':(slice(0,None,2),slice(0,None,2)),
+                     'Gr':(slice(0,None,2),slice(1,None,2)),
+                     'Gb':(slice(1,None,2),slice(0,None,2)),
+                     'B':(slice(1,None,2),slice(1,None,2))}.items():
+        c = raw[sl].astype(float)
+        center = c[100:260, 200:440].mean()
+        gain = cv2.GaussianBlur(center/(c+1e-6), (21,21), 0)
+        np.save(f'lsc_db/{lens}_{name}.npy', gain)
+print('已產生 12 個增益圖（3 鏡頭 × 4 通道）')
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">階段 4｜套用與回歸驗證</div><pre>python3 - <<'EOF'
+import numpy as np
+raw = np.fromfile('shot_B.raw', dtype=np.uint16).reshape(720,1280)
+out = raw.copy().astype(float)
+for name, sl in {'R':(slice(0,None,2),slice(0,None,2)),
+                 'Gr':(slice(0,None,2),slice(1,None,2)),
+                 'Gb':(slice(1,None,2),slice(0,None,2)),
+                 'B':(slice(1,None,2),slice(1,None,2))}.items():
+    out[sl] = out[sl] * np.load(f'lsc_db/B_{name}.npy')
+out = np.clip(out,0,1023).astype(np.uint16)
+out.tofile('shot_B_lsc.raw')
+c0 = raw[300:420,500:780].mean(); c1 = raw[10:80,10:80].mean()
+o0 = out[300:420,500:780].mean(); o1 = out[10:80,10:80].mean()
+print(f'校正前 corner/center = {c1/c0:.3f} → 校正後 = {o1/o0:.3f}')
+EOF</pre></div>
+<div class="callout"><strong>專案完成標準：</strong>你有一份 <code>lsc_db/</code> 資料庫（每鏡頭每通道的增益圖）+ 套用腳本。換鏡頭、換解析度都能快速切換對應增益圖——這是多樣化產品的標準做法。</div>
+
+<h2>12.17 量測/驗證 SOP：LSC 效果驗收</h2>
+<table>
+<tr><th>步驟</th><th>作法</th><th>通過判據</th></tr>
+<tr><td>1. 拍均勻亮場</td><td>diffuse 光源 + 灰/白卡</td><td>峰值壓在 ~80% 滿量程</td></tr>
+<tr><td>2. 量校正前 shading</td><td>corner/center 比值</td><td>記錄基準（如 0.56）</td></tr>
+<tr><td>3. 算增益圖</td><td>分通道 + 平滑</td><td>增益圖平滑無爆點</td></tr>
+<tr><td>4. 套用後重測</td><td>corner/center 比值</td><td>接近 1.0（±5%）</td></tr>
+<tr><td>5. 色差檢查</td><td>角落 R/B 比值</td><td>無明顯色偏（色差 shading 已處理）</td></tr>
+<tr><td>6. 換模式回歸</td><td>換解析度/binning 重測</td><td>必要時重新校正</td></tr>
+</table>
+<div class="callout warn"><strong>SOP 紀律：</strong>「角落變亮」≠「LSC 完成」——還要檢查色差（分通道）與雜訊（平滑）。且 LSC 是鏡頭+感測器+解析度組合特有，換任何一項都要重做。</div>
+
+<h2>12.18 平台間對照：鏡頭陰影校正</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th></tr>
+<tr><td>硬體 LSC</td><td>RK3588 有 / H618 無</td><td>硬體 ISP 內建</td><td>NVIDIA ISP 內建</td><td>NVIDIA ISP 內建</td></tr>
+<tr><td>網格</td><td>RK 17×13 / 後處理任意</td><td>libcamera tuning</td><td>NVIDIA 網格</td><td>NVIDIA 網格</td></tr>
+<tr><td>分通道</td><td>後處理可做</td><td>ISP 內建</td><td>ISP 內建</td><td>ISP 內建</td></tr>
+<tr><td>校正工具</td><td>自寫 Python</td><td>libcamera tuning 工具</td><td>NVIDIA 工具</td><td>NVIDIA 工具</td></tr>
+<tr><td>即時性</td><td>⚠️ 後處理 CPU</td><td>✅ 硬體</td><td>✅ 硬體</td><td>✅ 硬體</td></tr>
+</table>
+<div class="callout info"><strong>核心領悟：</strong>LSC 的「數學」四平台相同（中心照度 / 各點照度），差異在「誰做」——Orange Pi 沒硬體時用後處理（非即時），有硬體時用封閉工具。用 Python 先學會原理，任何平台都能對應。</div>
+
+<h2>12.19 互動式檢核清單：本單元進階驗收</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 我能完成多鏡頭 LSC 資料庫專案並產出增益圖。
+- [ ] 我能量測校正前後的 corner/center 比值。
+- [ ] 我能分通道做 LSC 並避免色差殘留。
+- [ ] 我理解為什麼 LSC 必須在 RAW 上做而非 YUV。
+- [ ] 我已平滑增益圖避免放大雜訊。
+- [ ] 我知道 H618 沒有硬體 LSC，後處理是唯一路線。</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>lens shading 成因。</li><li>Orange Pi 三條 LSC 路線。</li><li>後處理 LSC 實作。</li><li>LSC 需隨組合重新校正。</li><li>cos⁴ law 與分通道增益的必要性。</li><li>完整後處理 LSC 的 Worked Example。</li></ul>

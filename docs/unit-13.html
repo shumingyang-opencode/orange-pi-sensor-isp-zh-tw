@@ -175,6 +175,73 @@ EOF</pre></div>
 <li>比較 OV5640 DPC 在「開/關」狀態下，NR 前後的 hot pixel 數量變化，量化 DPC 的重要性。</li>
 </ol>
 
+  <h2>13.18 專案級 Worked Example：雜訊預算與降噪策略專案</h2>
+<p>把單元 13 的雜訊知識做成<strong>完整雜訊管理專案</strong>：建立「場景照度 → 增益上限 → SNR → 降噪策略」的決策鏈。這是低光產品（監控、門鈴、車載）畫質控制的基礎。</p>
+<div class="demo-block"><div class="demo-label">階段 1｜量各增益的 SNR 曲線（單元 13.10）</div><pre>v4l2-ctl -d /dev/v4l-subdev0 -c auto_exposure=0 -c auto_gain=0
+for g in 64 128 256 512 1024; do
+  v4l2-ctl -d /dev/v4l-subdev0 -c gain=$g
+  v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=1 --stream-to=g$g.raw
+done</pre></div>
+<div class="demo-block"><div class="demo-label">階段 2｜算 SNR 並訂增益上限</div><pre>python3 - <<'EOF'
+import numpy as np
+for g in [64,128,256,512,1024]:
+    raw = np.fromfile(f'g{g}.raw', dtype=np.uint16).reshape(720,1280)
+    roi = raw[300:420,500:780].astype(float)
+    snr = 20*np.log10(roi.mean()/max(roi.std(),1e-6))
+    flag = 'OK' if snr>=30 else '超上限'
+    print(f'gain={g:5d}  SNR={snr:5.1f} dB  {flag}')
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">階段 3｜定降噪策略</div><pre><span class="hl-c"># 依 SNR 分級：</span>
+<span class="hl-c">#   SNR ≥ 40 dB → 不需 NR（保留細節）</span>
+<span class="hl-c">#   30–40 dB   → 輕度時域平均（2 幀）</span>
+<span class="hl-c">#   < 30 dB    → 空間 NR + 補光建議</span>
+python3 - <<'EOF'
+<span class="hl-c"># 時域平均（多幀降噪）範例：</span>
+import numpy as np
+frames = [np.fromfile(f'seq_{i}.raw', dtype=np.uint16).reshape(720,1280)
+          for i in range(1,5)]
+avg = np.mean(frames, axis=0).astype(np.uint16)
+avg.tofile('seq_avg.raw')
+print('4 幀時域平均完成（SNR 約提升 6 dB）')
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">階段 4｜產出雜訊管理文件</div><pre><span class="hl-c"># 輸出範例：</span>
+<span class="hl-c"># 場景照度     建議曝光   增益上限   SNR    降噪策略</span>
+<span class="hl-c"># 日間(>500lx)  2000     128       ≥45   無</span>
+<span class="hl-c"># 黃昏(50lx)   8000     256       35     時域平均 x2</span>
+<span class="hl-c"># 夜間(5lx)    20000    512       28     空間 NR + 補光</span></pre></div>
+<div class="callout"><strong>專案完成標準：</strong>你有一份「雜訊管理表」：每個場景照度等級的曝光/增益/降噪建議。產品設計時依表調度，畫質在「可接受 SNR」與「細節保留」之間取得一致平衡。</div>
+
+<h2>13.19 量測/驗證 SOP：雜訊與 SNR 驗收</h2>
+<table>
+<tr><th>步驟</th><th>作法</th><th>通過判據</th></tr>
+<tr><td>1. 鎖定條件</td><td>關 AEC/AGC，固定曝光</td><td>條件穩定可控</td></tr>
+<tr><td>2. 逐級增益取樣</td><td>每級取 RAW</td><td>每級皆有效資料</td></tr>
+<tr><td>3. 量 ROI σ</td><td>避開飽和與黑位區</td><td>σ 合理（無飽和失真）</td></tr>
+<tr><td>4. 算 SNR</td><td>20·log10(mean/σ)</td><td>記錄每級 SNR</td></tr>
+<tr><td>5. 訂上限</td><td>SNR 掉到目標值以下</td><td>訂出增益上限</td></tr>
+<tr><td>6. 驗證 DPC 順序</td><td>黑框 RAW 的 max</td><td>DPC 後亮點被壓制</td></tr>
+</table>
+<div class="callout warn"><strong>SOP 紀律：</strong>量 σ 絕不能在飽和區（σ 失真）或 JPEG（壓縮污染）。永遠用 RAW、避開飽和、固定 ROI——這是雜訊量測的三個鐵律。</div>
+
+<h2>13.20 平台間對照：雜訊與降噪</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th></tr>
+<tr><td>硬體 NR</td><td>RK3588 有 / H618 無</td><td>ISP 內建 NR</td><td>NVIDIA ISP NR</td><td>NVIDIA ISP NR</td></tr>
+<tr><td>DPC</td><td>感測器 DPC</td><td>ISP + libcamera</td><td>NVIDIA DPCC</td><td>NVIDIA DPCC</td></tr>
+<tr><td>後處理 NR</td><td>OpenCV fastNlMeans</td><td>libcamera 後期</td><td>可選</td><td>Holoscan 元件</td></tr>
+<tr><td>時域平均</td><td>自寫 Python</td><td>libcamera 支援</td><td>可選</td><td>可選</td></tr>
+<tr><td>NR 控制</td><td>參數開放（可調）</td><td>開源可改</td><td>封閉</td><td>封閉</td></tr>
+</table>
+<div class="callout info"><strong>核心領悟：</strong>雜訊物理（shot/read/dark）四平台相同，SNR 預算方法通用。Orange Pi 的優勢是「能親手實作時域/空間降噪」——理解原理後，任何平台的 NR 參數都看得懂。</div>
+
+<h2>13.21 互動式檢核清單：本單元進階驗收</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 我能完成雜訊管理專案並產出「雜訊管理表」。
+- [ ] 我能量測各增益的 SNR 並訂出增益上限。
+- [ ] 我理解「拉增益不改善 SNR」的數學原理。
+- [ ] 我遵守「DPC 先、NR 後」的順序。
+- [ ] 我已用時域平均驗證 SNR 提升（多幀 +6dB）。
+- [ ] 我知道如何在四平台對應 NR 策略（硬體/後處理）。</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>四種雜訊來源。</li><li>OV5640 DPC 角色。</li><li>Orange Pi 降噪三策略。</li><li>降噪與細節取捨。</li></ul>

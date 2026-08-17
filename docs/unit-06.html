@@ -168,6 +168,67 @@ done</pre></div>
 <li>設計一支 bring-up 自動化腳本：依序檢查電源→clock→I2C→ID→取流，每步回傳 pass/fail，最終產出一份 HTML 報告。</li>
 </ol>
 
+  <h2>6.18 專案級 Worked Example：完整感光元件 bring-up 專案 — 從 DT overlay 到第一張圖</h2>
+<p>把單元 1–6 串成一個<strong>完整 bring-up 專案</strong>：從一片空白板卡開始，寫 DT overlay → probe → 建管線 → 取到第一張圖。這是「能獨立 bring-up 一顆感測器」的總驗收。</p>
+<div class="demo-block"><div class="demo-label">階段 1｜硬體盤點（單元 1）</div><pre>uname -a
+sudo i2cdetect -l
+ls /dev/video* /dev/v4l-subdev* 2>/dev/null</pre></div>
+<div class="demo-block"><div class="demo-label">階段 2｜寫 DT overlay（單元 6）</div><pre>/dts-v1/;
+/plugin/;
+&amp;i2c3 {
+  status = "okay";
+  ov5640: ov5640@3c {
+    compatible = "ovti,ov5640";
+    reg = &lt;0x3c&gt;;
+    clocks = &lt;&amp;clk_cam0&gt;;
+    clock-frequency = &lt;24000000&gt;;
+    reset-gpios = &lt;&amp;gpio1 7 GPIO_ACTIVE_LOW&gt;;
+    pinctrl-0 = &lt;&amp;camera_pwr_en&gt;;
+  };
+};</pre></div>
+<div class="demo-block"><div class="demo-label">階段 3｜probe + 讀 ID（單元 3）</div><pre>sudo dtoverlay ov5640.dtbo
+sudo reboot
+dmesg | grep -i -E "ov5640|probe"
+sudo i2cget -y 3 0x3c 0x300a   <span class="hl-c"># 0x56</span></pre></div>
+<div class="demo-block"><div class="demo-label">階段 4｜建管線取第一張圖（單元 5）</div><pre>media-ctl -d /dev/media0 -r
+media-ctl -d /dev/media0 -l "'ov5640 3-003c':0->'csi2':0[1]"
+media-ctl -d /dev/media0 -V "'ov5640 3-003c':0[fmt:UYVY8_2X8/1280x720]"
+v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=YUYV \
+  --stream-mmap=3 --stream-count=1 --stream-to=first.yuv
+ls -l first.yuv   <span class="hl-c"># 1,843,200 bytes</span></pre></div>
+<div class="callout"><strong>專案完成標準：</strong>四階段全過 = 你已具備獨立 bring-up 能力。把每階段輸出存成 <code>bringup_log.txt</code>，這是你團隊「已知可用組合」文件的第一筆資料。</div>
+
+<h2>6.19 量測/驗證 SOP：bring-up 全流程驗收</h2>
+<table>
+<tr><th>階段</th><th>驗證項目</th><th>通過判據</th></tr>
+<tr><td>1. 電源</td><td>AVDD/DVDD/DOVDD 電壓</td><td>電表量測符合 datasheet（單元 6.1）</td></tr>
+<tr><td>2. Clock</td><td>XCLK 頻率</td><td>示波器量到 ~24 MHz</td></tr>
+<tr><td>3. Reset</td><td>RESET 極性與釋放</td><td>GPIO debug 顯示 high（active-low）</td></tr>
+<tr><td>4. I2C</td><td>i2cdetect + 讀 ID</td><td>0x3c 出現，讀回 0x56/0x40</td></tr>
+<tr><td>5. Media</td><td>media-ctl entity 與 link</td><td>sensor+csi+video 齊全</td></tr>
+<tr><td>6. 出圖</td><td>v4l2-ctl 取幀</td><td>取得正確 sizeimage 的幀</td></tr>
+</table>
+<div class="callout warn"><strong>SOP 紀律：</strong>bring-up 是「依序過關」，不是「找到一個就結束」。電源 → clock → reset → I2C → media → 出圖，每一關的證據（指令輸出）都要留存，才能讓下一個人複製你的成功。</div>
+
+<h2>6.20 平台間對照：Sensor Bring-up</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th></tr>
+<tr><td>overlay 機制</td><td>dtbo + dtoverlay</td><td>config.txt dtoverlay</td><td>Device tree + board config</td><td>Device tree + Holoscan</td></tr>
+<tr><td>XCLK 來源</td><td>板卡 clock 樹</td><td>RPi 專屬 clock</td><td>感測器電源板</td><td>感測器電源板</td></tr>
+<tr><td>probe 日誌</td><td>dmesg（全開放）</td><td>dmesg + libcamera log</td><td>dmesg（部分封閉）</td><td>dmesg + Holoscan log</td></tr>
+<tr><td>錯誤重試</td><td>unbind/bind 驅動</td><td>重載 libcamera</td><td>重開 service</td><td>重開 pipeline</td></tr>
+<tr><td>除錯深度</td><td>完全可見（register 層）</td><td>高但被抽象</td><td>低（封閉）</td><td>低（封閉）</td></tr>
+</table>
+<div class="callout info"><strong>核心領悟：</strong>Orange Pi 的 bring-up 是最「裸露」的——所有失敗都看得見、也可全手動操作。這正是練習 bring-up 的最佳平台；在 NVIDIA 平台，這些細節被封裝起來，學習成本反而更高。</div>
+
+<h2>6.21 互動式檢核清單：本單元進階驗收</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 我能從零寫出一個 OV5640 的最小 DT overlay。
+- [ ] 我能依序驗證電源 → clock → reset → I2C → media → 出圖。
+- [ ] 我已產出帶指令輸出的 bringup_log.txt。
+- [ ] 我能從 dmesg 分辨 probe 失敗的根因類別。
+- [ ] 我理解 t_PW_UP 為何是「register 寫不進去」的隱藏殺手。
+- [ ] 我能把 bring-up 知識應用於不同 SoC（RK3588 vs H618）。</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>Bring-up 四件事。</li><li>用 dmesg 追 probe/CSI 錯誤。</li><li>透過 controls 與 i2c 讀 register。</li><li>照決策樹排解。</li></ul>

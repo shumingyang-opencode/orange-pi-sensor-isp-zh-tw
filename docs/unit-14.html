@@ -194,6 +194,86 @@ EOF</pre></div>
 <li>設計一個完整的 tuning log 系統（含版本管理、raw 存檔、參數 JSON），寫進你的 team repo 成為標準流程。</li>
 </ol>
 
+  <h2>14.17 專案級 Worked Example：完整調校工作流自動化專案</h2>
+<p>把單元 14 的工作流知識做成<strong>自動化調校專案</strong>：把「黑位 → LSC → AWB/CCM → 曝光 → NR/Sharpen」串成一支可重複執行的腳本，自動產出校正前後對比與 tuning log。這是把「會調」升級成「可重現調」的關鍵。</p>
+<div class="demo-block"><div class="demo-label">階段 1｜建立專案結構</div><pre>mkdir -p tuning_v1/{raw,params,out,log}
+cd tuning_v1</pre></div>
+<div class="demo-block"><div class="demo-label">階段 2｜自動採集基準資料</div><pre>#!/bin/bash
+<span class="hl-c"># 蓋鏡頭拍黑幀定黑位</span>
+v4l2-ctl -d /dev/video0 --set-fmt-video=pixelformat=SRGGB10 \
+  --stream-mmap=3 --stream-count=1 --stream-to=raw/dark.raw
+<span class="hl-c"># 均勻亮場定 LSC</span>
+v4l2-ctl -d /dev/video0 --stream-count=1 --stream-to=raw/flat.raw
+<span class="hl-c"># 灰卡定 AWB + 曝光</span>
+v4l2-ctl -d /dev/video0 --set-fmt-video=pixelformat=YUYV \
+  --stream-count=1 --stream-to=raw/gray.yuv
+<span class="hl-c"># 實拍場景（前後對比用）</span>
+v4l2-ctl -d /dev/video0 --stream-count=1 --stream-to=raw/scene.yuv</pre></div>
+<div class="demo-block"><div class="demo-label">階段 3｜自動執行校正鏈（單元 14.9）</div><pre>python3 - <<'EOF'
+import numpy as np, cv2, json
+<span class="hl-c"># 黑位</span>
+dark = np.fromfile('raw/dark.raw', dtype=np.uint16).reshape(720,1280)
+ob = np.median(dark[600:700,400:880])
+<span class="hl-c"># LSC（分通道增益圖）</span>
+flat = np.fromfile('raw/flat.raw', dtype=np.uint16).reshape(720,1280) - ob
+gains = {}
+for name, sl in {'R':(slice(0,None,2),slice(0,None,2)),
+                 'Gr':(slice(0,None,2),slice(1,None,2)),
+                 'Gb':(slice(1,None,2),slice(0,None,2)),
+                 'B':(slice(1,None,2),slice(1,None,2))}.items():
+    c = flat[sl].astype(float)
+    gains[name] = cv2.GaussianBlur(c[100:260,200:440].mean()/(c+1e-6), (21,21), 0)
+<span class="hl-c"># 儲存參數</span>
+np.save('params/ob.npy', ob)
+for k,v in gains.items(): np.save(f'params/gain_{k}.npy', v)
+json.dump({'ob': float(ob)}, open('params/meta.json','w'))
+print('校正參數已儲存:', json.load(open('params/meta.json')))
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">階段 4｜套用 + 產出 log</div><pre>python3 - <<'EOF'
+import numpy as np
+raw = np.fromfile('raw/scene.raw', dtype=np.uint16).reshape(720,1280)
+out = (raw - np.load('params/ob.npy')).clip(0).astype(float)
+for name, sl in {'R':(slice(0,None,2),slice(0,None,2)),
+                 'Gr':(slice(0,None,2),slice(1,None,2)),
+                 'Gb':(slice(1,None,2),slice(0,None,2)),
+                 'B':(slice(1,None,2),slice(1,None,2))}.items():
+    out[sl] *= np.load(f'params/gain_{name}.npy')
+np.clip(out,0,1023).astype(np.uint16).tofile('out/scene_tuned.raw')
+print('校正完成，log 寫入 log/tuning_v1.txt')
+EOF</pre></div>
+<div class="callout"><strong>專案完成標準：</strong>你有一支 <code>tune.sh</code> + 專案目錄結構（raw/params/out/log），任何時刻都能重跑並產出可比較的結果。調校從「手動藝術」變成「可重現工程」——這是團隊協作的基礎。</div>
+
+<h2>14.18 量測/驗證 SOP：調校成果驗收與回歸</h2>
+<table>
+<tr><th>步驟</th><th>作法</th><th>通過判據</th></tr>
+<tr><td>1. 校正前後對比</td><td>同一場景前後各存一張</td><td>畫質指標改善（亮度/色準/SNR）</td></tr>
+<tr><td>2. 中性灰檢查</td><td>灰卡 ROI 的 R=G=B</td><td>色偏 < 5%</td></tr>
+<tr><td>3. 曝光基準</td><td>灰卡 Y 達目標</td><td>Y 落在目標區間</td></tr>
+<tr><td>4. 動態範圍檢查</td><td>亮/暗 ROI 未爆</td><td>亮部 < 1023、暗部 > 黑位</td></tr>
+<tr><td>5. 場景回歸</td><td>室內/日光/逆光各測</td><td>無新缺陷（過曝/偏色/雜訊）</td></tr>
+<tr><td>6. 可重現性</td><td>重跑 tune.sh</td><td>輸出一致（無隨機差異）</td></tr>
+</table>
+<div class="callout warn"><strong>SOP 紀律：</strong>回歸是調校的最後一關——「這場景好了」≠「全部場景都好」。校正順序（黑位→LSC→AWB→曝光）不可顛倒，每次改動都要回到同場景同光源比較。</div>
+
+<h2>14.19 平台間對照：調校工作流</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th></tr>
+<tr><td>校正層級</td><td>RAW/後處理為主</td><td>libcamera tuning</td><td>NVIDIA tuning</td><td>NVIDIA tuning</td></tr>
+<tr><td>HDR</td><td>OV5640 DOL（依驅動）</td><td>libcamera HDR</td><td>NVIDIA HDR</td><td>NVIDIA HDR</td></tr>
+<tr><td>參數管理</td><td>自建 JSON/CSV</td><td>libcamera tuning file</td><td>NVIDIA 工具</td><td>NVIDIA 工具</td></tr>
+<tr><td>回歸工具</td><td>自寫腳本</td><td>libcamera test</td><td>NVIDIA test</td><td>NVIDIA test</td></tr>
+<tr><td>自動化程度</td><td>完全自建</td><td>中（半自動）</td><td>高（封閉）</td><td>高（封閉）</td></tr>
+</table>
+<div class="callout info"><strong>核心領悟：</strong>調校工作流（採集 → 校正 → 美化 → 回歸）四平台相同。Orange Pi 的一切都要自己寫——這份「從零建立」的經驗，正是看懂其他平台 tuning 工具的鑰匙。</div>
+
+<h2>14.20 互動式檢核清單：本單元進階驗收</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 我能完成 tune.sh 自動化調校專案並產出 log。
+- [ ] 我已建立 raw/params/out/log 的專案結構。
+- [ ] 我遵守「黑位→LSC→AWB/CCM→曝光→美化」的順序。
+- [ ] 我能量測場景動態範圍並判斷要不要 HDR。
+- [ ] 我已跑過至少三個場景的回歸並記錄結果。
+- [ ] 我理解「可重現調校 = 完整 log + 版本管理」。</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>Sharpen/Contrast 後處理調校。</li><li>OV5640 DOL HDR 與驅動現況。</li><li>五步調校工作流。</li><li>「先 RAW 對、再後處理」原則。</li></ul>

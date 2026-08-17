@@ -182,6 +182,68 @@ EOF</pre></div>
 <li>在 RK3588 上，用 ISP3 的 zone-based AWB 與 OV5640 內建 AWB 分別拍混合色溫場景，量化兩者的 Delta E 差異。</li>
 </ol>
 
+  <h2>11.18 專案級 Worked Example：多光源色彩校正資料庫專案</h2>
+<p>把單元 11 的色彩知識做成<strong>完整的色彩校正資料庫專案</strong>：為多種光源建立「色溫 → AWB gains → CCM」查表，並驗證不同光源下的色準。這是產品「色彩一致性」的根基。</p>
+<div class="demo-block"><div class="demo-label">階段 1｜定義光源清單</div><pre><span class="hl-c"># 日光燈(4000K)、白熾燈(2700K)、陰天(6500K)、LED(5000K)、黃昏(3000K)</span>
+declare -A K=( [fluo]=4000 [tungsten]=2700 [cloudy]=6500 [led]=5000 [dusk]=3000 )</pre></div>
+<div class="demo-block"><div class="demo-label">階段 2｜逐光源灰卡校正（單元 11.9）</div><pre>#!/bin/bash
+for src in fluo tungsten cloudy led dusk; do
+  v4l2-ctl -d /dev/v4l-subdev0 -c auto_exposure=0 -c exposure=2000
+  v4l2-ctl -d /dev/v4l-subdev0 -c auto_n_white_balance=0
+  v4l2-ctl -d /dev/video0 --set-fmt-video=pixelformat=YUYV \
+    --stream-mmap=3 --stream-count=1 --stream-to=gray_$src.yuv
+  <span class="hl-c"># 手動調 red/blue_balance 直到灰卡 R≈G≈B</span>
+  echo "$src: 記錄 red_balance / blue_balance"
+done</pre></div>
+<div class="demo-block"><div class="demo-label">階段 3｜建立查表（CSV）</div><pre>python3 - <<'EOF'
+import csv
+rows = [('fluo',4000,135,105), ('tungsten',2700,160,85),
+        ('cloudy',6500,120,135), ('led',5000,128,112), ('dusk',3000,150,95)]
+with open('awb_lut.csv','w',newline='') as f:
+    w = csv.writer(f)
+    w.writerow(['light','kelvin','red_balance','blue_balance'])
+    w.writerows(rows)
+print('已寫入 awb_lut.csv')
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">階段 4｜驗證色準（色卡 + 後處理 CCM）</div><pre>python3 - <<'EOF'
+<span class="hl-c"># 用 ColorChecker 的 patch 平均色比對目標值，算 Delta E</span>
+import numpy as np
+<span class="hl-c"># measured = 讀色卡 patch 的 RGB；target = 標準值</span>
+<span class="hl-c"># Delta E 計算（簡化）：對每個 patch 比對 LAB 距離</span>
+print('目標：所有 patch 平均 Delta E < 8（Consumer）、< 5（工控）')
+EOF</pre></div>
+<div class="callout"><strong>專案完成標準：</strong>你有一份 <code>awb_lut.csv</code> 查表 + 各光源的 Delta E 報告。產品需要換光源或換場景時，直接查表套用，不必重新摸索——這是色彩一致性的核心資產。</div>
+
+<h2>11.19 量測/驗證 SOP：色彩準確度驗證</h2>
+<table>
+<tr><th>步驟</th><th>作法</th><th>通過判據</th></tr>
+<tr><td>1. 灰卡校正</td><td>固定光源/曝光，調 gains 到 R=G=B</td><td>灰卡中性</td></tr>
+<tr><td>2. 色卡量測</td><td>拍 ColorChecker，比對 24 patches</td><td>計算平均 Delta E</td></tr>
+<tr><td>3. AWB 一致性</td><td>同一光源重複 5 次校正</td><td>gains 變異 < 5%</td></tr>
+<tr><td>4. 跨光源驗證</td><td>每光源套用各自查表</td><td>白平衡保持中性</td></tr>
+<tr><td>5. CCM 收尾</td><td>固定光源解 CCM 矩陣</td><td>彩色彩差收斂</td></tr>
+</table>
+<div class="callout warn"><strong>SOP 紀律：</strong>色彩驗證最忌「用螢幕/手機當參考」——不是灰卡就是錯的。灰卡 + 色卡 + 固定光源 + 量化 Delta E，才是可信的色彩流程。</div>
+
+<h2>11.20 平台間對照：色彩校正</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th></tr>
+<tr><td>AWB</td><td>感測器端 / 手動 gains</td><td>libcamera AWB</td><td>NVIDIA AWB</td><td>NVIDIA AWB</td></tr>
+<tr><td>CCM</td><td>後處理 OpenCV</td><td>libcamera tuning</td><td>NVIDIA tuning</td><td>NVIDIA tuning</td></tr>
+<tr><td>gains 表示</td><td>red_balance/blue_balance（整數）</td><td>ColourGains（浮點比值）</td><td>Argus 內部</td><td>Argus 內部</td></tr>
+<tr><td>混合色溫</td><td>後處理分區 CCM</td><td>libcamera 全局</td><td>NVIDIA 分區 AWB</td><td>NVIDIA 分區 AWB</td></tr>
+<tr><td>色準工具</td><td>自寫 Python Delta E</td><td>libcamera 工具</td><td>NVIDIA 工具</td><td>NVIDIA 工具</td></tr>
+</table>
+<div class="callout info"><strong>核心領悟：</strong>AWB/CCM 的數學四平台相同，差異在「誰幫你算」與「精度」。Orange Pi 的 gains 是整數（128=1.0×），RPi5 用浮點比值（1.4）——換算時注意定義，別直接搬數值。</div>
+
+<h2>11.21 互動式檢核清單：本單元進階驗收</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 我能完成多光源校正專案並產出 awb_lut.csv。
+- [ ] 我能用灰卡校正並量化 Delta E。
+- [ ] 我理解「AWB 讓白變白，CCM 讓彩色變準」的差異。
+- [ ] 我已建立至少兩組色溫的 gains 查表。
+- [ ] 我理解 Orange Pi 整數 gains 與 RPi5 浮點 gains 的換算。
+- [ ] 我能處理混合色溫場景（分區 CCM 或接受限制）。</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>AWB 原理與 gains。</li><li>OV5640 AWB 與 V4L2 控制。</li><li>灰卡校正流程。</li><li>混合色溫的局限與分層策略。</li></ul>

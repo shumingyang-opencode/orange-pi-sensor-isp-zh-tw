@@ -128,6 +128,67 @@ media-ctl -p -d /dev/media1 2>/dev/null | grep -E "ov5640|ov9281|csi"</pre></div
 <li>假設你的 DT overlay 誤將 OV5640 的 clock-frequency 設為 12MHz（正確為 24MHz），從 dmesg 到 i2cdetect 到 media-ctl，逐步寫出你會看到什麼症狀、以及如何定位到 clock 錯誤。</li>
 </ol>
 
+  <h2>1.13 專案級 Worked Example：完整感光元件 bring-up 專案 — 從 DT overlay 到第一張圖</h2>
+<p>把單元 1–6 的知識串成一個<strong>端到端專案</strong>：從一片空白板卡開始，完成「DT overlay → probe → 管線 → 第一張圖」。這是你在這門課第一個可交付的里程碑。</p>
+<div class="demo-block"><div class="demo-label">階段 1｜盤點平台（單元 1）</div><pre>uname -a
+ls /dev/video* /dev/v4l-subdev* 2>/dev/null
+sudo i2cdetect -l</pre></div>
+<div class="demo-block"><div class="demo-label">階段 2｜寫 DT overlay（單元 6）</div><pre><span class="hl-c"># 最小 overlay：啟用 I2C3 + 感測器節點</span>
+/dts-v1/;
+/plugin/;
+&amp;i2c3 {
+  status = "okay";
+  ov5640: ov5640@3c {
+    compatible = "ovti,ov5640";
+    reg = &lt;0x3c&gt;;
+    clocks = &lt;&amp;clk_cam0&gt;;
+    clock-frequency = &lt;24000000&gt;;
+    pinctrl-names = "default";
+    pinctrl-0 = &lt;&amp;camera_pwr_en&gt;;
+  };
+};</pre></div>
+<div class="demo-block"><div class="demo-label">階段 3｜probe 驗證 + 讀 ID（單元 3）</div><pre>dmesg | grep -i -E "ov5640|probe"
+sudo i2cget -y 3 0x3c 0x300a    <span class="hl-c"># 預期 0x56</span></pre></div>
+<div class="demo-block"><div class="demo-label">階段 4｜建管線取第一張圖（單元 5）</div><pre>media-ctl -d /dev/media0 -r
+media-ctl -d /dev/media0 -l "'ov5640 3-003c':0->'csi2':0[1]"
+media-ctl -d /dev/media0 -V "'ov5640 3-003c':0[fmt:UYVY8_2X8/1280x720]"
+v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=YUYV \
+  --stream-mmap=3 --stream-count=1 --stream-to=first.yuv
+ls -l first.yuv   <span class="hl-c"># 1,843,200 bytes</span></pre></div>
+<div class="callout"><strong>專案完成標準：</strong>四個階段全部通過，且你能在團隊 SOP 文件上寫出「這片板卡 + 這顆鏡頭」的已知可用組合：SoC、I2C bus、位址、clock、lane、格式。這就是你所有後續調校的基石。</div>
+
+<h2>1.14 量測/驗證 SOP：板卡相機生態驗收</h2>
+<p>在動手接任何鏡頭之前，先用固定 SOP 把板卡的相機生態「量」清楚，避免盲目投資。</p>
+<table>
+<tr><th>步驟</th><th>指令</th><th>通過判據</th></tr>
+<tr><td>1. 確認 SoC</td><td><code>cat /proc/device-tree/compatible | tr '\0' '\n'</code></td><td>清楚寫出 RK3588 / H618 / H616</td></tr>
+<tr><td>2. 列 video 節點</td><td><code>ls /dev/video* /dev/v4l-subdev*</code></td><td>節點存在；數量與預期相符</td></tr>
+<tr><td>3. 列 I2C bus</td><td><code>sudo i2cdetect -l</code></td><td>知道相機該掛哪個 bus</td></tr>
+<tr><td>4. media graph</td><td><code>media-ctl -p -d /dev/media0</code></td><td>entity 清單與 DT 一致</td></tr>
+<tr><td>5. 讀感測器 ID</td><td><code>sudo i2cget -y 3 0x3c 0x300a</code></td><td>回 0x56（OV5640）</td></tr>
+</table>
+<div class="callout info"><strong>SOP 產出：</strong>驗收結果寫成一頁「平台盤點表」，作為 bring-up 專案（1.13）的前置文件。之後每次換板卡都重跑一遍。</div>
+
+<h2>1.15 平台間對照：相機生態總覽</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th></tr>
+<tr><td>代表 SoC</td><td>RK3588 / H618</td><td>BCM2712</td><td>Orin Nano（Ampere）</td><td>T5000（Blackwell）</td></tr>
+<tr><td>CSI 接收器</td><td>RK3588 4× CSI-2 / H618 1×</td><td>2× CSI-2（4-lane）</td><td>CSI-2（最多 16-lane）</td><td>CSI-2 + 更高速介面</td></tr>
+<tr><td>平台 ISP</td><td>RK3588 有 / H618 無</td><td>硬體 ISP（開源）</td><td>NVIDIA ISP</td><td>NVIDIA ISP + Blackwell</td></tr>
+<tr><td>控制介面</td><td>V4L2 subdev / media-ctl</td><td>libcamera</td><td>tegracam / Argus</td><td>Holoscan / GXF</td></tr>
+<tr><td>常見感測器位址</td><td>0x3c（bus 3）</td><td>0x3c（bus 22）</td><td>0x36（bus 0）</td><td>0x36（bus 0）</td></tr>
+<tr><td>生態「已知可用組合」</td><td>BSP 社群 overlay</td><td>libcamera 支援清單</td><td>NVIDIA 相容表</td><td>Holoscan 套件</td></tr>
+</table>
+<div class="callout warn"><strong>跨平台要點：</strong>四平台都走「感測器 → CSI-2 → (ISP) → userspace」同一條物理路徑，差異只在抽象層。Orange Pi 學到的 V4L2/media-ctl 知識，搬到 RPi5 是 libcamera、搬到 NVIDIA 是 Argus——但 register 與時序是同一套。</div>
+
+<h2>1.16 互動式檢核清單：本單元進階驗收</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 我能背出我板卡的 SoC、CSI 數量、有無平台 ISP。
+- [ ] 我能用 media-ctl -p 畫出板卡完整的 media graph。
+- [ ] 我已跑完 1.14 SOP 並產出「平台盤點表」。
+- [ ] 我能解釋「感測器位址 0x3c vs 0x36」的由來。
+- [ ] 我能指出 RK3588 與 H618 在「調校能力」上的本質差異。
+- [ ] 我已開始 1.13 專案，至少完成階段 1 盤點。</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>Orange Pi 的 SoC 決定相機能力。</li><li>V4L2 / media controller 管線。</li><li>OV5640 是 Linux 上最常見 OV 感測器。</li><li>先確認板卡 BSP 支援。</li><li>media graph 中 entity/link 的意義。</li><li>用四步 Worked Example 盤點板卡相機生態。</li></ul>

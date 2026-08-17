@@ -136,6 +136,62 @@ EOF</pre></div>
 <li>設計一個 Python 腳本，自動從 RAW 檔案推斷 Bayer order（不用假設），方法是分析相鄰像素的互相關。</li>
 </ol>
 
+  <h2>2.13 專案級 Worked Example：感測器 RAW 品質檢驗專案 — 從取 RAW 到全頻譜驗證</h2>
+<p>把單元 2、8、12、13 串成一個<strong>感測器品質檢驗專案</strong>：對同一顆 OV5640 完整驗證「Bayer order、位元深、黑位、雜訊、shading」五項規格。這是任何調校開始前必做的「感測器體檢」。</p>
+<div class="demo-block"><div class="demo-label">階段 1｜拍三張基準 RAW（單元 8）</div><pre>v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=SRGGB10 \
+  --stream-mmap=3 --stream-count=1 --stream-to=dark.raw    <span class="hl-c"># 蓋鏡頭</span>
+v4l2-ctl -d /dev/video0 --stream-count=1 --stream-to=flat.raw   <span class="hl-c"># 均勻亮場</span>
+v4l2-ctl -d /dev/video0 --stream-count=1 --stream-to=color.raw  <span class="hl-c"># 色卡</span></pre></div>
+<div class="demo-block"><div class="demo-label">階段 2｜全頻譜分析腳本</div><pre>python3 - <<'EOF'
+import numpy as np
+def analyze(fn):
+    raw = np.fromfile(fn, dtype=np.uint16).reshape(720,1280)
+    return dict(R=raw[0::2,0::2], Gr=raw[0::2,1::2],
+                Gb=raw[1::2,0::2], B=raw[1::2,1::2])
+dark = analyze('dark.raw');  flat = analyze('flat.raw');  color = analyze('color.raw')
+ob = np.median(dark['R'])
+print('黑位 OB =', ob)
+print('亮場 corner/center ratio:',
+      round(flat['R'][350:420,500:780].mean()/flat['R'][10:80,10:80].mean(),3))
+print('色卡四通道:', {k: round(v.mean(),1) for k,v in color.items()})
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">階段 3｜記錄並判定</div><pre><span class="hl-c"># 判定標準：</span>
+<span class="hl-c"># Bayer order: 拍純紅/純藍時 R/B 通道應分別最高</span>
+<span class="hl-c"># 位元深: 亮場峰值應接近 1023（10-bit 滿量程）</span>
+<span class="hl-c"># 黑位: dark 中位數應落在 0–64 之間（>64 可能黑位偏高）</span>
+<span class="hl-c"># 雜訊: 灰卡暗部 σ 應在合理範圍（單元 13 詳細量）</span></pre></div>
+<div class="callout"><strong>專案完成標準：</strong>你產出一張「感測器體檢表」，記錄五項規格的量測值與判定結果。這張表是之後所有調校（黑位、LSC、AWB、NR）的基準線。</div>
+
+<h2>2.14 量測/驗證 SOP：感測器規格驗證</h2>
+<table>
+<tr><th>步驟</th><th>作法</th><th>通過判據</th></tr>
+<tr><td>1. 驗證 Bayer order</td><td>拍純紅/純藍色卡，比較四通道均值</td><td>純紅時 R 最高、純藍時 B 最高</td></tr>
+<tr><td>2. 驗證位元深</td><td>拍亮場看峰值</td><td>10-bit 峰值 ≈ 1023；用對應 dtype 讀</td></tr>
+<tr><td>3. 量黑位</td><td>蓋鏡頭拍暗幀，取中位數</td><td>OB 落在 0–64（10-bit）合理範圍</td></tr>
+<tr><td>4. 量雜訊基底</td><td>灰卡中低光 ROI 的 σ</td><td>σ 隨增益上升而上升（單元 13）</td></tr>
+<tr><td>5. 量 shading</td><td>亮場 corner/center 比值</td><td>比值 < 1，記錄供單元 12 用</td></tr>
+</table>
+<div class="callout warn"><strong>SOP 紀律：</strong>每次換解析度 / binning / 鏡頭都要重跑一遍——規格是「組合特有」的，不能跨模式共用。</div>
+
+<h2>2.15 平台間對照：影像感測器基礎</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th></tr>
+<tr><td>取得 RAW</td><td>v4l2-ctl SRGGB10</td><td>rpicam --raw</td><td>argus raw capture</td><td>Holoscan capture</td></tr>
+<tr><td>常見感測器</td><td>OV5640 / OV9281</td><td>IMX219 / OV5647</td><td>IMX219 / OV9281</td><td>IMX 系列高階</td></tr>
+<tr><td>RAW 位元深</td><td>8/10/12 依 fourcc</td><td>10/12</td><td>10/12/14</td><td>10/12/14</td></tr>
+<tr><td>Bayer 驗證工具</td><td>自行寫 Python</td><td>libcamera + rpicam-apps</td><td>NVIDIA 工具 + Argus</td><td>Holoscan 範例</td></tr>
+<tr><td>感測器內 ISP</td><td>OV5640 內建</td><td>IMX 內建（有限）</td><td>感測器直出 RAW</td><td>感測器直出 RAW</td></tr>
+</table>
+<div class="callout info"><strong>核心共通點：</strong>不管哪個平台，「RAW 是影像品質分析的唯一真相」——Bayer order、黑位、雜訊都必須在 RAW 上驗證，這是四平台通用的第一條鐵律。</div>
+
+<h2>2.16 互動式檢核清單：本單元進階驗收</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 我能用四通道均值驗證 OV5640 的 RGGB order。
+- [ ] 我能說明 SRGGB10 與 SRGGB8 的位元深差異與讀取方式。
+- [ ] 我已量測並記錄本平台的黑位 OB 值。
+- [ ] 我能解釋 rolling 與 global shutter 的取捨。
+- [ ] 我已跑完 2.13 專案並產出「感測器體檢表」。
+- [ ] 我能指出「RAW 驗證」為何是四平台通用的第一鐵律。</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>感測器光→RAW 流程。</li><li>OV5640 RGGB 與 5MP 規格。</li><li>Rolling/Global 差異。</li><li>OV5640 完整規格與 I2C 位址。</li><li>full well / ADC bit 的意義。</li><li>用 RAW 四通道驗證 Bayer order。</li></ul>

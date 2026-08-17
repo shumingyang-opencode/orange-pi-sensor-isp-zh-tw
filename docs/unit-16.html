@@ -172,6 +172,58 @@ v4l2-ctl -d /dev/video2 --stream-mmap=3 --stream-count=10</pre></div>
 <li>在 RK3588 上，實作「OV5640 出 RAW → ISP3 做 NR/AWB → RGA 旋轉 90° → MPP 編碼」的完整管線，找出每一級的延遲瓶頸。</li>
 </ol>
 
+  <h2>16.16 專案級 Worked Example：多相機系統端到端 bring-up 專案</h2>
+<p>把單元 16（多感測器）與單元 1–6 串成<strong>完整多相機 bring-up 專案</strong>：在 RK3588 上同時 bring-up OV5640（RGB）與 OV9281（IR），建立兩條獨立管線並驗證同時取流。這是本課程的「畢業專案」。</p>
+<div class="demo-block"><div class="demo-label">階段 1｜硬體與 DT 確認（單元 1/6）</div><pre>sudo i2cdetect -l
+<span class="hl-c"># 確認兩顆感測器分掛不同 bus：bus3=OV5640(0x3c)，bus4=OV9281(0x60)</span>
+sudo i2cget -y 3 0x3c 0x300a   <span class="hl-c"># 0x56</span>
+sudo i2cget -y 4 0x60 0x300a   <span class="hl-c"># 0x92</span></pre></div>
+<div class="demo-block"><div class="demo-label">階段 2｜確認兩路 video device（單元 4/5）</div><pre>v4l2-ctl --list-devices
+<span class="hl-c"># 假設 /dev/video0=OV5640, /dev/video2=OV9281</span>
+media-ctl -p -d /dev/media0 | grep -E "ov5640|ov9281|csi"</pre></div>
+<div class="demo-block"><div class="demo-label">階段 3｜建立兩條管線（單元 16.6）</div><pre>media-ctl -d /dev/media0 -r
+media-ctl -d /dev/media0 -l "'ov5640 3-003c':0->'csi2_a':0[1]"
+media-ctl -d /dev/media0 -V "'ov5640 3-003c':0[fmt:UYVY8_2X8/1280x720]"
+media-ctl -d /dev/media1 -l "'ov9281 4-0060':0->'csi2_b':0[1]"
+media-ctl -d /dev/media1 -V "'ov9281 4-0060':0[fmt:Y8_1X8/1280x720]"</pre></div>
+<div class="demo-block"><div class="demo-label">階段 4｜同時取流驗證（單元 11 頻寬）</div><pre>v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=30 --stream-to=rgb.yuv &
+v4l2-ctl -d /dev/video2 --stream-mmap=3 --stream-count=30 --stream-to=ir.yuv &
+wait
+ls -l rgb.yuv ir.yuv
+<span class="hl-c"># 兩檔大小符合各自格式理論值 = 兩路同時成功</span></pre></div>
+<div class="callout"><strong>專案完成標準：</strong>兩顆感測器同時取流成功，且你能回答「頻寬夠不夠、VC 用不用、兩路各自 media device 對應」三個問題。這就是多感測器系統的完整 bring-up 能力。</div>
+
+<h2>16.17 量測/驗證 SOP：多感測器系統驗收</h2>
+<table>
+<tr><th>步驟</th><th>作法</th><th>通過判據</th></tr>
+<tr><td>1. 硬體盤點</td><td>i2cdetect + 讀 ID</td><td>每顆感測器位址與 ID 正確</td></tr>
+<tr><td>2. 節點對應</td><td>v4l2-ctl --list-devices</td><td>每顆感測器有獨立 video node</td></tr>
+<tr><td>3. 單路測試</td><td>逐路單獨取流</td><td>各路皆可獨立出圖</td></tr>
+<tr><td>4. 同時測試</td><td>兩路並行取流</td><td>無 frame drop / 無資源衝突</td></tr>
+<tr><td>5. 頻寬計算</td><td>算總 bitrate vs DDR/CSI 上限</td><td>未超過上限（單元 11）</td></tr>
+<tr><td>6. 長期穩定</td><td>同時跑 10 分鐘</td><td>0 掉幀、0 逾時</td></tr>
+</table>
+<div class="callout warn"><strong>SOP 紀律：</strong>多相機的雷多在「共享資源」——先單路確認、再同時測試，一旦同時出問題，用「逐路停用」二分法縮小範圍（是資源不足，還是某路驅動不穩）。</div>
+
+<h2>16.18 平台間對照：多感測器支援</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th></tr>
+<tr><td>多 CSI</td><td>RK3588 4× / H618 1×</td><td>2× CSI（4-lane）</td><td>多路 CSI</td><td>多路 CSI</td></tr>
+<tr><td>Virtual Channel</td><td>RK3588 支援 VC0-3</td><td>支援</td><td>支援</td><td>支援</td></tr>
+<tr><td>同時取流</td><td>可行（RK3588）</td><td>可行</td><td>可行</td><td>可行</td></tr>
+<tr><td>工具</td><td>media-ctl 逐路設定</td><td>libcamera multi-camera</td><td>Argus 多 camera</td><td>Holoscan 多 stream</td></tr>
+<tr><td>頻寬瓶頸</td><td>DDR 為主</td><td>ISP/記憶體</td><td>NVIDIA 強（多路 4K）</td><td>最強（多路高解析）</td></tr>
+</table>
+<div class="callout info"><strong>核心領悟：</strong>「先單路、再並行、用二分法找瓶頸」是多相機除錯的通用流程，四平台皆然。Orange Pi 的 RK3588 有 4 組 receiver，是練習多相機最划算的硬體。</div>
+
+<h2>16.19 互動式檢核清單：本單元進階驗收</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 我能完成多相機 bring-up 專案並讓兩路同時取流。
+- [ ] 我能列出每顆感測器的 bus、位址、video node 對應。
+- [ ] 我會用「單路→並行→二分法」排查多相機問題。
+- [ ] 我能計算兩路同時取流的總頻寬需求。
+- [ ] 我能說明 virtual channel 與獨立 lanes 的差異。
+- [ ] 我已驗證多路 10 分鐘長期穩定無掉幀。</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>多相機 media 管線。</li><li>客製 OV 接入四步。</li><li>Orange Pi 調校 OV5640 完整案例。</li><li>最佳實踐。</li></ul>

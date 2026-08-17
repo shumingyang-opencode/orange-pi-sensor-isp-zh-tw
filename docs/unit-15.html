@@ -151,6 +151,66 @@ gst-launch-1.0 nvarguscamerasrc sensor-id=0 ! 'video/x-raw(memory:NVMM)' ! fakes
 <li>在有第二平台的情況下，用同一顆 OV5640 模組分別接兩平台，比較「相同曝光設定」下的實際亮度差異（可能因 ISP 前端處理不同）。</li>
 </ol>
 
+  <h2>15.14 專案級 Worked Example：跨平台移植對照專案</h2>
+<p>把單元 15 的跨平台知識做成<strong>完整的移植對照專案</strong>：選定一個調校任務（如「鎖曝光 2000、關 AWB、取 RAW」），在 Orange Pi 建立基準結果，再對照 RPi5 / NVIDIA 寫出等效設定並驗證。產出一份「移植對照文件」。</p>
+<div class="demo-block"><div class="demo-label">階段 1｜在 Orange Pi 建立基準（單元 10/11）</div><pre>v4l2-ctl -d /dev/v4l-subdev0 -c auto_exposure=0 -c exposure=2000 \
+  -c auto_n_white_balance=0 -c red_balance=140 -c blue_balance=110
+v4l2-ctl -d /dev/video0 --set-fmt-video=pixelformat=SRGGB10 \
+  --stream-mmap=3 --stream-count=1 --stream-to=baseline.raw
+ls -l baseline.raw   <span class="hl-c"># 記錄 sizeimage 與亮度基準</span></pre></div>
+<div class="demo-block"><div class="demo-label">階段 2｜寫出四平台等效設定</div><pre><span class="hl-c"># Orange Pi（V4L2）</span>
+v4l2-ctl -d /dev/v4l-subdev0 -c exposure=2000 -c auto_exposure=0
+<span class="hl-c"># RPi5（libcamera）: shutter 2000µs + awbgains 固定</span>
+rpicam-still -o shot.jpg --shutter 2000 --awbgains 1.4,1.1 --gain 1.0
+<span class="hl-c"># Orin Nano（Argus）: SensorMode exp_time + AWB off</span>
+<span class="hl-c"># Thor（Holoscan）: sensor mode 參數設定</span></pre></div>
+<div class="demo-block"><div class="demo-label">階段 3｜建立單位轉換表（單元 15.12）</div><pre>python3 - <<'EOF'
+row_us = 29.6    <span class="hl-c"># OV5640 1080p@30fps 的 1-line 週期（µs）</span>
+exposure_lines = 2000
+exposure_us = exposure_lines * row_us
+print(f'Orange Pi exposure=2000 lines → {exposure_us:.0f} µs = RPi5 shutter')
+<span class="hl-c"># gains: Orange Pi 整數 128=1.0×，RPi5 浮點 1.0×</span>
+red_ratio = 140/128
+print(f'red_balance=140 → {red_ratio:.2f}× (RPi5 的 ColourGains R)')
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">階段 4｜產出移植對照文件</div><pre><span class="hl-c"># 移植對照.md 範例結構：</span>
+<span class="hl-c"># 任務 | Orange Pi | RPi5 | Orin | Thor | 單位/備註</span>
+<span class="hl-c"># 曝光 | exposure=2000 | shutter=59000µs | exp_time=59000 | 同上 | 2000×29.6µs</span>
+<span class="hl-c"># AWB  | red=140 blue=110 | awbgains 1.4,1.1 | AWB off+gains | 同上 | 128=1.0×</span>
+<span class="hl-c"># RAW  | v4l2-ctl SRGGB10 | rpicam --raw | argus raw | capture | 同 10-bit</span></pre></div>
+<div class="callout"><strong>專案完成標準：</strong>你有一份「移植對照文件」，把核心任務在四平台的設定、單位、轉換公式寫清楚。任何團隊成員換平台時，照表操作即可——這是跨平台專案的標準資產。</div>
+
+<h2>15.15 量測/驗證 SOP：跨平台等效性驗收</h2>
+<table>
+<tr><th>步驟</th><th>作法</th><th>通過判據</th></tr>
+<tr><td>1. 建立基準</td><td>Orange Pi 上完成任務並記錄結果</td><td>基準 RAW 與參數記錄</td></tr>
+<tr><td>2. 寫等效設定</td><td>換算單位（lines↔µs、整數↔浮點）</td><td>換算公式正確</td></tr>
+<tr><td>3. 執行比較</td><td>第二平台跑相同任務</td><td>亮度/格式接近基準</td></tr>
+<tr><td>4. 讀 register 驗證</td><td>兩平台都 i2cget 0x3501/0x3502</td><td>register 值一致（同為 2000 lines）</td></tr>
+<tr><td>5. 差異記錄</td><td>ISP 前端差異造成的亮度差</td><td>記錄並解釋差異來源</td></tr>
+</table>
+<div class="callout warn"><strong>SOP 紀律：</strong>跨平台最常見的坑是「數值照搬」——exposure 的單位、gains 的定義、位址（0x3c vs 0x36）都要先對照。一律以「感測器 register 的最終值」為驗證標準，而不是平台 API 的數字。</div>
+
+<h2>15.16 平台間對照：調校能力總覽</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th></tr>
+<tr><td>抽象層</td><td>最低（V4L2 subdev）</td><td>中（libcamera）</td><td>高（Argus）</td><td>最高（Holoscan）</td></tr>
+<tr><td>開放度</td><td>最高（全開放）</td><td>開源</td><td>封閉</td><td>封閉</td></tr>
+<tr><td>調校深度</td><td>低–中</td><td>高</td><td>高</td><td>高</td></tr>
+<tr><td>工具鏈</td><td>V4L2 + 自寫 Python</td><td>libcamera tools</td><td>NVIDIA tools</td><td>Holoscan SDK</td></tr>
+<tr><td>學習曲線</td><td>陡（要懂底層）</td><td>中</td><td>中（封閉但強）</td><td>中（新）</td></tr>
+<tr><td>適合</td><td>理解感測器</td><td>開源產品</td><td>量產畫質</td><td>多機/雲端</td></tr>
+</table>
+<div class="callout info"><strong>核心領悟：</strong>四平台做的是同一件事，介面不同但原理 100% 可平移。Orange Pi 是「最低抽象層」——把它學透，等於拿到其他平台介面底下的共同底層。</div>
+
+<h2>15.17 互動式檢核清單：本單元進階驗收</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 我能完成跨平台移植對照專案並產出文件。
+- [ ] 我能換算 Orange Pi 的 lines 與 RPi5 的 µs 曝光單位。
+- [ ] 我能換算整數 gains（128=1.0×）與浮點比值。
+- [ ] 我知道 Orin/Thor 的 OV 位址是 0x36 而非 0x3c。
+- [ ] 我理解「感測器物理可攜、介面不可攜」並能舉例。
+- [ ] 我能用「感測器 register 最終值」驗證跨平台等效性。</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>四平台調校能力差異。</li><li>Orange Pi 定位：底層開放、功能有限。</li><li>各平台工具鏈與門檻。</li><li>依目的選平台。</li></ul>

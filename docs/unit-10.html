@@ -148,6 +148,66 @@ done</pre></div>
 <li>在日光燈下，找出 OV5640 在 50Hz 與 60Hz 電源下「不 banding」的曝光值區間，並解釋為什麼 banding filter 在某些值無效。</li>
 </ol>
 
+  <h2>10.17 專案級 Worked Example：曝光預算與自動曝光調校專案</h2>
+<p>把單元 10 的曝光知識做成<strong>完整曝光調校專案</strong>：為你的應用（固定幀率、日夜模式）訂出曝光/增益上限、驗證 AEC 收斂、建立「場景 → 曝光參數」對照表。這是從「能拍照」走向「曝光可控」的關鍵專案。</p>
+<div class="demo-block"><div class="demo-label">階段 1｜訂曝光預算（單元 10/11）</div><pre>python3 - <<'EOF'
+fps = 30
+lines_per_frame = 1125        <span class="hl-c"># 1080p@30fps 含 blanking</span>
+row_period_us = 1e6 / fps / lines_per_frame
+max_exposure_lines = lines_per_frame * 0.9   <span class="hl-c"># 留 10% blanking</span>
+print(f'row 週期 = {row_period_us:.1f} µs')
+print(f'最大曝光 = {max_exposure_lines:.0f} lines ≈ {max_exposure_lines*row_period_us:.0f} µs')
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">階段 2｜驗證 AEC 收斂（單元 5/10）</div><pre>v4l2-ctl -d /dev/v4l-subdev0 -c auto_exposure=1
+for i in 1 2 3 4 5; do
+  sleep 1
+  v4l2-ctl -d /dev/v4l-subdev0 -C exposure
+  v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=1 --stream-to=aec_$i.yuv
+done</pre></div>
+<div class="demo-block"><div class="demo-label">階段 3｜掃曝光曲線（單元 10.9）</div><pre>v4l2-ctl -d /dev/v4l-subdev0 -c auto_exposure=0
+for e in 500 1000 2000 4000 8000 16000; do
+  v4l2-ctl -d /dev/v4l-subdev0 -c exposure=$e
+  v4l2-ctl -d /dev/video0 --stream-mmap=3 --stream-count=1 --stream-to=exp_$e.yuv
+done</pre></div>
+<div class="demo-block"><div class="demo-label">階段 4｜產出曝光參數表</div><pre>python3 - <<'EOF'
+import numpy as np
+for e in [500,1000,2000,4000,8000,16000]:
+    buf = np.fromfile(f'exp_{e}.yuv', dtype=np.uint8)
+    y = buf.reshape(720,1280,2)[...,0]
+    print(f'exposure={e:6d}  Y mean={y.mean():6.1f}  peak={y.max():3d}')
+EOF</pre></div>
+<div class="callout"><strong>專案完成標準：</strong>你產出「曝光曲線」與「AEC 收斂時間」兩份數據，並訂出本應用的曝光/增益上限。之後任何場景都能快速套用——而不是每次從零摸索。</div>
+
+<h2>10.18 量測/驗證 SOP：曝光與頻閃驗證</h2>
+<table>
+<tr><th>步驟</th><th>作法</th><th>通過判據</th></tr>
+<tr><td>1. 確認曝光單位</td><td><code>--list-ctrls</code> 看 exposure 的 min/max/step</td><td>知道單位（lines 或 µs）</td></tr>
+<tr><td>2. 驗證手動生效</td><td>關 auto 設值後讀回</td><td>讀回與設定一致</td></tr>
+<tr><td>3. 驗證單調性</td><td>掃描曝光觀察亮度</td><td>亮度隨曝光單調上升</td></tr>
+<tr><td>4. 頻閃測試</td><td>日光燈下掃描曝光找 banding</td><td>找出 50/60Hz 安全區間</td></tr>
+<tr><td>5. AEC 收斂</td><td>場景切換後量收斂時間</td><td>記錄收斂到穩定所需的幀數</td></tr>
+</table>
+<div class="callout warn"><strong>SOP 紀律：</strong>曝光調校的常見誤區是「不關 auto 就手動設值」——設了等於沒設。所有驗證第一步都是把 auto_exposure / auto_gain 明確關閉或開啟。</div>
+
+<h2>10.19 平台間對照：曝光控制</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th></tr>
+<tr><td>曝光 control</td><td>V4L2 exposure</td><td>ExposureTime（libcamera）</td><td>SensorMode exp_time</td><td>SensorMode exp_time</td></tr>
+<tr><td>單位</td><td>lines（OV）</td><td>µs</td><td>µs</td><td>µs</td></tr>
+<tr><td>AEC</td><td>感測器內建</td><td>libcamera AE</td><td>NVIDIA AE</td><td>NVIDIA AE</td></tr>
+<tr><td>增益上限</td><td>自訂（後處理輔助）</td><td>libcamera 限制</td><td>NVIDIA 設定</td><td>NVIDIA 設定</td></tr>
+<tr><td>頻閃/banding</td><td>手動控制</td><td>libcamera 支援</td><td>NVIDIA 支援</td><td>NVIDIA 支援</td></tr>
+</table>
+<div class="callout info"><strong>核心領悟：</strong>「先快門 → 類比增益 → 數位增益」是物理鐵律，四平台皆然。Orange Pi 用 lines 為單位、RPi5/NVIDIA 用 µs——換算透過 datasheet 的 row 週期即可（1 line ≈ 29.6 µs @ 1080p30）。</div>
+
+<h2>10.20 互動式檢核清單：本單元進階驗收</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 我能完成曝光調校專案並產出曝光曲線。
+- [ ] 我能換算 lines ↔ µs 的曝光單位。
+- [ ] 我已訂出本應用的曝光與增益上限。
+- [ ] 我能用掃描找出日光燈下的安全曝光區間。
+- [ ] 我理解「先快門 → 增益 → 數位增益」的物理依據。
+- [ ] 我能驗證 AEC 收斂並記錄收斂時間。</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>曝光三要素與 register。</li><li>V4L2 controls 控制曝光。</li><li>AEC 收斂與上下限。</li><li>「補光 vs 硬調」取捨。</li></ul>

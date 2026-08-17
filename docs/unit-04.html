@@ -131,6 +131,56 @@ readlink -f /sys/bus/i2c/devices/3-003c/driver</pre></div>
 <li>測試 <code>v4l2-ctl -d /dev/v4l-subdev0</code> 與 <code>v4l2-ctl -d /dev/video0</code> 對同一個 control（如 exposure）的差異，解釋為什麼 API 不同。</li>
 </ol>
 
+  <h2>4.13 專案級 Worked Example：驅動與節點盤點自動化專案 — 從 /sys 到 media graph</h2>
+<p>把單元 4 的 subdev 知識做成<strong>可交付的盤點工具</strong>：自動建立「video device → subdev → DT 節點 → 驅動」完整對照表。這是跨平台移植、多人協作除錯時的「單一事實來源」。</p>
+<div class="demo-block"><div class="demo-label">階段 1｜自動列 video 與 subdev</div><pre>for d in /sys/class/video4linux/*; do
+  name=$(basename $d)
+  devname=$(cat $d/name)
+  dt=$(readlink -f $d/device)
+  echo "$name | $devname | $dt"
+done</pre></div>
+<div class="demo-block"><div class="demo-label">階段 2｜抓 media graph 的 entity 對照</div><pre>media-ctl -p -d /dev/media0 | grep -E "entity|type|device node" | head -30</pre></div>
+<div class="demo-block"><div class="demo-label">階段 3｜列出感測器 controls 全集</div><pre>v4l2-ctl -d /dev/v4l-subdev0 --list-ctrls</pre></div>
+<div class="demo-block"><div class="demo-label">階段 4｜產生對照表</div><pre>#!/bin/bash
+echo "===== 平台相機節點盤點表 $(date) ====="
+echo "--- video devices ---"
+v4l2-ctl --list-devices
+echo "--- i2c devices bound to ov5640 ---"
+ls -la /sys/bus/i2c/devices/ | grep -i ov
+echo "--- driver ---"
+readlink -f /sys/bus/i2c/devices/*/driver 2>/dev/null | grep -i ov</pre></div>
+<div class="callout"><strong>專案完成標準：</strong>你有一支 <code>camera_inventory.sh</code>，跑一次就產出完整盤點表。把輸出存進 repo，任何人接手都能在 5 分鐘內看懂這片板卡的相機系統架構。</div>
+
+<h2>4.14 量測/驗證 SOP：subdev 介面驗證</h2>
+<table>
+<tr><th>步驟</th><th>指令</th><th>通過判據</th></tr>
+<tr><td>1. 節點存在性</td><td><code>ls /dev/v4l-subdev* /dev/video*</code></td><td>節點存在</td></tr>
+<tr><td>2. 驅動綁定</td><td><code>readlink -f /sys/bus/i2c/devices/*/driver</code></td><td>指向 ov5640 驅動</td></tr>
+<tr><td>3. entity 數量</td><td><code>media-ctl -p -d /dev/media0</code></td><td>sensor + csi + (isp) + video 齊全</td></tr>
+<tr><td>4. controls 可用</td><td><code>v4l2-ctl -d /dev/v4l-subdev0 --list-ctrls</code></td><td>有 exposure/gain/white_balance</td></tr>
+<tr><td>5. 控制生效</td><td><code>-c exposure=2000</code> 後 <code>-C exposure</code></td><td>讀回與設定一致</td></tr>
+</table>
+<div class="callout warn"><strong>SOP 紀律：</strong>驗證「驅動有沒有綁定」永遠比「media-ctl 為什麼沒有輸出」先做——綁定失敗時 media graph 一定不完整，別浪費時間在後端。</div>
+
+<h2>4.15 平台間對照：相機框架與驅動</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th></tr>
+<tr><td>框架</td><td>V4L2 + media controller</td><td>libcamera</td><td>tegracam + Argus</td><td>Holoscan + GXF</td></tr>
+<tr><td>感測器驅動</td><td>ov5640.c（mainline）</td><td>libcamera 驅動 + IPA</td><td>NVIDIA 封閉驅動</td><td>NVIDIA 封閉驅動</td></tr>
+<tr><td>subdev 節點</td><td>/dev/v4l-subdevN</td><td>libcamera 抽象（無直接節點）</td><td>內部抽象</td><td>內部抽象</td></tr>
+<tr><td>controls</td><td>V4L2_CID_*</td><td>libcamera controls</td><td>Argus SensorMode</td><td>Holoscan 參數</td></tr>
+<tr><td>可移植性</td><td>Linux 標準，最通用</td><td>RPi 專屬但開源</td><td>NVIDIA 專屬</td><td>NVIDIA 新世代</td></tr>
+</table>
+<div class="callout info"><strong>核心領悟：</strong>「感測器驅動」在四平台的共同點是「都實作 subdev 概念（開電源、設定格式、開始串流、控制）」——Orange Pi 的 V4L2 subdev 是最低層、最接近感測器 register 的抽象，學透它，其他平台只是包裝。</div>
+
+<h2>4.16 互動式檢核清單：本單元進階驗收</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 我能跑出 camera_inventory.sh 並產出完整盤點表。
+- [ ] 我能指出 video 節點與 subdev 節點的 API 差異。
+- [ ] 我已從 /sys 追蹤出 OV5640 的驅動綁定鏈。
+- [ ] 我能列出本平台感測器的全部 controls 與範圍。
+- [ ] 我了解 libcamera / Argus / V4L2 之間的抽象層差異。
+- [ ] 我能從「media graph 不完整」反推是驅動還是 DT 問題。</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>V4L2 subdev 與 media 管線。</li><li>ov5640.c 是 Linux 驅動範本。</li><li>V4L2 controls 是 register 的抽象。</li><li>media-ctl/v4l2-ctl 查管線與 controls。</li><li>subdev 生命週期回呼與硬體狀態對應。</li><li>節點與管線對不上的排解方向。</li></ul>

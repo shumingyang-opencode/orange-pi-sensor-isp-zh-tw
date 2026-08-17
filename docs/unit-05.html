@@ -139,6 +139,64 @@ gst-launch-1.0 v4l2src device=/dev/video0 ! capsfilter caps='video/x-raw,format=
 <li>在 RK3588 上同時開兩個 <code>v4l2-ctl --stream-mmap</code> 從同一個 video device 取流，觀察是否成功。解釋 V4L2 的 multi-queue 行為。</li>
 </ol>
 
+  <h2>5.18 專案級 Worked Example：取流與錄製管線專案 — 從單幀到自動錄製</h2>
+<p>把單元 5 的取流知識做成<strong>端到端錄製專案</strong>：先取單幀驗證，再建立「連續錄影 → 自動分段 → 格式檢查」的完整管線。這是所有影像應用（監控、檢測、錄製）的共通基礎。</p>
+<div class="demo-block"><div class="demo-label">階段 1｜單幀驗證（單元 5）</div><pre>media-ctl -d /dev/media0 -r
+media-ctl -d /dev/media0 -l "'ov5640 3-003c':0->'csi2':0[1]"
+v4l2-ctl -d /dev/video0 --set-fmt-video=width=1280,height=720,pixelformat=YUYV \
+  --stream-mmap=3 --stream-count=1 --stream-to=first.yuv
+ls -l first.yuv    <span class="hl-c"># 1280*720*2 = 1,843,200</span></pre></div>
+<div class="demo-block"><div class="demo-label">階段 2｜連續錄製並分段</div><pre>#!/bin/bash
+for i in $(seq 1 10); do
+  v4l2-ctl -d /dev/video0 --stream-mmap=4 --stream-count=30 \
+    --stream-to=clip_$i.yuv     <span class="hl-c"># 30 幀 = 1 秒（30fps）</span>
+  echo "clip_$i 完成: $(stat -c%s clip_$i.yuv) bytes"
+done</pre></div>
+<div class="demo-block"><div class="demo-label">階段 3｜格式驗證與可視化</div><pre>python3 - <<'EOF'
+import numpy as np
+W,H=1280,720
+buf = np.fromfile('clip_1.yuv', dtype=np.uint8)
+print('size =', buf.size, '預期 =', W*H*2)
+y = buf.reshape(H,W,2)[...,0]
+print('Y 平均亮度 =', y.mean().round(1), ' 峰值 =', y.max())
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">階段 4｜GStreamer 即時錄製（硬體編碼）</div><pre>gst-launch-1.0 v4l2src device=/dev/video0 ! \
+  'video/x-raw,format=YUYV,width=1280,height=720,framerate=30/1' ! \
+  videoconvert ! video/x-raw,format=NV12 ! \
+  mpph264enc ! h264parse ! mp4mux ! filesink location=rec.mp4</pre></div>
+<div class="callout"><strong>專案完成標準：</strong>你有一支 <code>record_clips.sh</code> 可自動分段錄製，且能驗證每個 clip 的大小與亮度正常。整條「取流 → 驗證 → 編碼 → 存檔」管線可重複執行——這正是所有實作專案的骨架。</div>
+
+<h2>5.19 量測/驗證 SOP：取流穩定性驗證</h2>
+<table>
+<tr><th>步驟</th><th>指令</th><th>通過判據</th></tr>
+<tr><td>1. 管線重置</td><td><code>media-ctl -d /dev/media0 -r</code></td><td>無錯誤</td></tr>
+<tr><td>2. 建 link</td><td><code>media-ctl -l '...:0->...:0[1]'</code></td><td>link 建立成功</td></tr>
+<tr><td>3. 取 100 幀</td><td><code>--stream-count=100</code></td><td>100 幀全數成功，無 timeout</td></tr>
+<tr><td>4. 量幀率</td><td>計時 100 幀所需時間</td><td>接近目標（如 30fps → ~3.3s）</td></tr>
+<tr><td>5. 長期穩定</td><td>連續錄 10 分鐘監看掉幀</td><td>0 掉幀；掉幀 → 查頻寬（單元 11）</td></tr>
+<tr><td>6. 中斷恢復</td><td>Ctrl-C 後立即重跑</td><td>能重新取得節點（無 EBUSY）</td></tr>
+</table>
+<div class="callout warn"><strong>SOP 紀律：</strong>「能取一幀」與「能穩定取流」是兩件事。驗收目標是長時間不掉幀、中斷後可立即重連——這才是產品級取流。</div>
+
+<h2>5.20 平台間對照：取流與錄製</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th></tr>
+<tr><td>取流指令</td><td>v4l2-ctl</td><td>rpicam-still / libcamera</td><td>gst-launch nvarguscamerasrc</td><td>Holoscan capture</td></tr>
+<tr><td>預覽</td><td>GStreamer v4l2src</td><td>libcamera-hello</td><td>nvarguscamerasrc</td><td>Holoscan 範例</td></tr>
+<tr><td>硬體編碼</td><td>MPP（RK3588）/ CPU</td><td>H.264/H.265 硬體</td><td>NVENC</td><td>NVENC（Blackwell）</td></tr>
+<tr><td>錄製格式</td><td>mp4mux + mpph264enc</td><td>libcamera-vid</td><td>GStreamer + nvv4l2h264enc</td><td>Holoscan encoder</td></tr>
+<tr><td>最大解析度</td><td>依 BSP</td><td>1080p 常見</td><td>4K+</td><td>4K+ 多路</td></tr>
+</table>
+<div class="callout info"><strong>核心領悟：</strong>「取流 → 編碼 → 存檔」的管線邏輯四平台相同，差別只在編碼器（MPP vs H264 HW vs NVENC）。Orange Pi 學到的 V4L2 取流 + GStreamer 管線概念可直接平移。</div>
+
+<h2>5.21 互動式檢核清單：本單元進階驗收</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 我能跑完 record_clips.sh 並驗證每個 clip 大小與亮度。
+- [ ] 我能用 GStreamer 完成 V4L2 → 硬體編碼 → MP4 的完整管線。
+- [ ] 我已驗證 100 幀連續取流無 timeout。
+- [ ] 我能用 fakesink 隔離「資料流動」與「顯示輸出」問題。
+- [ ] 我能解釋 mmap buffer 迴圈（REQBUFS→QBUF→DQBUFF）的流程。
+- [ ] 我能指出 YUYV 與 NV12 在 GStreamer 管線中的轉換必要。</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>用 media-ctl 設定管線連結與格式。</li><li>用 v4l2-ctl 拍照取流。</li><li>用 GStreamer 預覽。</li><li>三種常見失敗的方向。</li></ul>

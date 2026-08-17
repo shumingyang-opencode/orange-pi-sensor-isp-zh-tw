@@ -147,6 +147,61 @@ EOF</pre></div>
 <li>設計一個管線：OV5640 → ISP3 出 NV12 → RGA 旋轉 90° → MPP 編碼。測量端到端延遲，找出瓶頸在哪一段。</li>
 </ol>
 
+  <h2>7.13 專案級 Worked Example：感測器端 vs 平台端 ISP 分工評估專案</h2>
+<p>把單元 7 的 ISP 知識做成<strong>架構評估專案</strong>：對你的應用需求，實測「感測器內 ISP」與「平台 ISP / 後處理」各能提供什麼，最後產出「誰來做什麼」的分工決定文件。</p>
+<div class="demo-block"><div class="demo-label">階段 1｜測感測器端 ISP 能力（單元 7）</div><pre>v4l2-ctl -d /dev/v4l-subdev0 --list-ctrls    <span class="hl-c"># 看有哪些感測器端校正</span>
+for r in 0x5000 0x5180 0x4600; do
+  echo -n "$r: "; sudo i2ctransfer -y 3 w2@0x3c ${r:2:2} ${r:4:2} r1
+done</pre></div>
+<div class="demo-block"><div class="demo-label">階段 2｜測平台 ISP 能力（單元 4/9）</div><pre>media-ctl -p -d /dev/media0 | grep -iE "isp|cif"    <span class="hl-c"># 有無平台 ISP</span>
+v4l2-ctl -d /dev/v4l-subdev0 --list-ctrls | wc -l     <span class="hl-c"># controls 數量 = 調校深度</span></pre></div>
+<div class="demo-block"><div class="demo-label">階段 3｜測後處理能力（單元 12/13）</div><pre>python3 -c "import cv2; print('OpenCV', cv2.__version__)"
+<span class="hl-c"># 量後處理 LSC/NR 的延遲（單元 12 增益圖、單元 13 NR）</span>
+python3 - <<'EOF'
+import cv2, time, numpy as np
+img = np.random.randint(0,255,(720,1280,3), dtype=np.uint8)
+t=time.time(); cv2.fastNlMeansDenoisingColored(img,None,10,10,7,21)
+print(f'OpenCV NR 延遲: {(time.time()-t)*1000:.0f} ms')
+EOF</pre></div>
+<div class="demo-block"><div class="demo-label">階段 4｜產出分工表</div><pre><span class="hl-c"># 範例輸出：</span>
+<span class="hl-c"># 任務      感測器   平台ISP   後處理    決定</span>
+<span class="hl-c"># 黑位      ✅0x4000  ✅OB      ✅      → 感測器</span>
+<span class="hl-c"># LSC       ⚠️小表    ✅網格     ✅      → 平台/後處理</span>
+<span class="hl-c"># AWB       ✅        ⚠️        ✅      → 感測器（簡單場景）</span>
+<span class="hl-c"># CCM       ❌        ✅        ✅      → 後處理</span>
+<span class="hl-c"># NR        ⚠️弱      ✅        ✅      → 後處理</span></pre></div>
+<div class="callout"><strong>專案完成標準：</strong>你有一份「ISP 分工決定文件」，對每個校正任務寫明「誰做、為何、用什麼參數」。這份文件就是你在這平台上的調校藍圖，也是日後升級平台時的對照依據。</div>
+
+<h2>7.14 量測/驗證 SOP：ISP 開關影響驗證</h2>
+<table>
+<tr><th>步驟</th><th>作法</th><th>通過判據</th></tr>
+<tr><td>1. 備份原始值</td><td>讀 0x5000–0x5003 全部欄位</td><td>記錄原始值</td></tr>
+<tr><td>2. 關單一功能</td><td>改 0x5000 的對應 bit</td><td>register 變更成功</td></tr>
+<tr><td>3. 重啟串流</td><td>STREAMOFF → STREAMON</td><td>新設定套用（7.5 提到需重啟）</td></tr>
+<tr><td>4. 取幀比較</td><td>開/關各取一幀</td><td>肉眼與數值可見差異</td></tr>
+<tr><td>5. 復原並確認</td><td>寫回原始值</td><td>回到基準狀態</td></tr>
+</table>
+<div class="callout warn"><strong>SOP 紀律：</strong>每次實驗只動一個開關、先備份後修改、改完必復原。這套「單變數實驗法」是所有 ISP 驗證的共通骨架。</div>
+
+<h2>7.15 平台間對照：ISP 管線</h2>
+<table>
+<tr><th>面向</th><th>Orange Pi</th><th>RPi5</th><th>Orin Nano</th><th>Thor</th></tr>
+<tr><td>平台 ISP</td><td>RK3588 有 / H618 無</td><td>硬體 ISP</td><td>NVIDIA ISP</td><td>NVIDIA ISP（新）</td></tr>
+<tr><td>3A 引擎</td><td>感測器內建為主</td><td>libcamera IPA</td><td>NVIDIA 3A</td><td>NVIDIA 3A</td></tr>
+<tr><td>LSC 網格</td><td>RK 工具 / 後處理</td><td>libcamera tuning</td><td>NVIDIA tuning</td><td>NVIDIA tuning</td></tr>
+<tr><td>調校文件</td><td>BSP 資料（少）</td><td>開源（完整）</td><td>封閉（需簽約）</td><td>封閉（新）</td></tr>
+<tr><td>自訂彈性</td><td>高（register 可直控）</td><td>中（IPA 可改）</td><td>低（封閉）</td><td>低（封閉）</td></tr>
+</table>
+<div class="callout info"><strong>核心領悟：</strong>Orange Pi 的 ISP 彈性在「底層」——你能直接摸到 register；RPi5 在「開源 IPA」；NVIDIA 在「封閉但強」。選擇平台 = 選擇你想在哪一層工作。</div>
+
+<h2>7.16 互動式檢核清單：本單元進階驗收</h2>
+<div class="demo-block"><div class="demo-label">checklist</div><pre>- [ ] 我能完成 ISP 分工評估專案並產出分工表。
+- [ ] 我能用 0x5000 開關實驗證明「哪一段由感測器做」。
+- [ ] 我明白「感測器有 LSC」與「可深度調 LSC」的差別。
+- [ ] 我已建立自己的「黑位/LSC/AWB/CCM/NR 誰來做」表。
+- [ ] 我能說明 RPi5（開源）vs NVIDIA（封閉）的調校路徑差異。
+- [ ] 我遵守「單變數實驗法」並保留每次實驗的備份。</pre></div>
+
   <div class="outcome">
     <strong>看完這單元你應該能說出：</strong>
     <ul><li>Orange Pi 的 ISP 現實。</li><li>OV5640 內建 AEC/AGC/AWB register 群。</li><li>RK3588 vs H6xx 差異。</li><li>感測器內 ISP 的優點與限制。</li><li>經典 ISP 管線各階段與 register 對應。</li><li>用 ISP 開關實驗驗證管線在哪一段。</li><li>感測器/平台/後處理三層的調校空間對照。</li></ul>
